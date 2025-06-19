@@ -147,19 +147,24 @@ if not st.session_state.authenticated:
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
 if uploaded_file:
-    df = pd.read_csv(uploaded_file)
-    if "Vertical Focus Claude" not in df.columns:
-        df["Vertical Focus Claude"] = ''
+    if "processed_df" not in st.session_state:
+        df = pd.read_csv(uploaded_file)
+        if "Vertical Focus Claude" not in df.columns:
+            df["Vertical Focus Claude"] = ''
 
-    with st.spinner("Processing websites..."):
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = []
-            for i, row in df.iterrows():
-                url = str(row["Account: Website"]).strip()
-                if url and url != 'nan':
-                    futures.append(executor.submit(classify_website, i, url, df))
-            for future in futures:
-                future.result()
+        with st.spinner("Processing websites..."):
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = []
+                for i, row in df.iterrows():
+                    url = str(row["Account: Website"]).strip()
+                    if url and url != 'nan':
+                        futures.append(executor.submit(classify_website, i, url, df))
+                for future in futures:
+                    future.result()
+
+        st.session_state["processed_df"] = df
+    else:
+        df = st.session_state["processed_df"]
 
     st.success("Processing complete.")
     buffer = io.BytesIO()
