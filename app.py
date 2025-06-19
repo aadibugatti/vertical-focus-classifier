@@ -162,7 +162,7 @@ if uploaded_file:
                 future.result()
 
     st.success("Processing complete.")
-    buffer = io.StringIO()
+    buffer = io.BytesIO()
     df.to_csv(buffer, index=False)
     buffer.seek(0)
 
@@ -172,6 +172,7 @@ if uploaded_file:
         file_name="classified_output.csv",
         mime="text/csv"
     )
+
 
     input_cost = (total_input_tokens / 1_000_000) * 3
     output_cost = (total_output_tokens / 1_000_000) * 15
