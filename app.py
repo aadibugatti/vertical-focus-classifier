@@ -7,11 +7,10 @@ import anthropic
 from datetime import datetime
 import threading
 import time
-import random
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 import concurrent.futures
 import io
-import hashlib
 
 # CONFIG
 CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"]
@@ -45,7 +44,30 @@ Return ONLY the vertical focus term (e.g., "Self Storage", "Outdoor Hospitality"
 URL: {url}
 """
 
-# Token usage tracker
+# Streamlit UI
+st.title("Vertical Focus Classifier")
+st.markdown("Upload a CSV with a column called `Account: Website` to classify each website by industry vertical.")
+
+# Authentication
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    password = st.text_input("Enter password", type="password")
+    if password == PASSWORD:
+        st.session_state.authenticated = True
+    else:
+        st.stop()
+
+# 🔧 Ensure session state variables are initialized before threads use them
+if "total_input_tokens" not in st.session_state:
+    st.session_state.total_input_tokens = 0
+if "total_output_tokens" not in st.session_state:
+    st.session_state.total_output_tokens = 0
+if "processed_data" not in st.session_state:
+    st.session_state.processed_data = {}
+
+# Token usage tracking
 def add_token_usage(response):
     if hasattr(response, "usage"):
         with token_lock:
@@ -102,7 +124,7 @@ def get_full_site_content(base_url):
     except:
         return None
 
-# Main classification
+# Main classifier
 def classify_website(i, url, df):
     if not url.lower().startswith(('http://', 'https://')):
         url = 'https://' + url
@@ -123,27 +145,10 @@ def classify_website(i, url, df):
 
     df.at[i, "Vertical Focus Claude"] = result
 
-# Streamlit UI
-st.title("Vertical Focus Classifier")
-st.markdown("Upload a CSV with a column called `Account: Website` to classify each website by industry vertical.")
-
-# Auth
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    password = st.text_input("Enter password", type="password")
-    if password == PASSWORD:
-        st.session_state.authenticated = True
-    else:
-        st.stop()
-
-# Session state init
-if "processed_data" not in st.session_state:
-    st.session_state.processed_data = {}
-
+# File uploader
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
+# File hashing
 def file_hash(file_obj):
     return hashlib.md5(file_obj.read()).hexdigest()
 
@@ -157,6 +162,7 @@ if uploaded_file:
         if "Vertical Focus Claude" not in df.columns:
             df["Vertical Focus Claude"] = ''
 
+        # Reset token counts before processing
         st.session_state.total_input_tokens = 0
         st.session_state.total_output_tokens = 0
 
@@ -188,7 +194,7 @@ if uploaded_file:
                     future.result()
                     update_progress(completed)
 
-            # Save to session state
+            # Cache result
             buffer = io.BytesIO()
             df.to_csv(buffer, index=False)
             buffer.seek(0)
@@ -202,7 +208,7 @@ if uploaded_file:
     else:
         st.success("Using cached results from previous run.")
 
-    # Serve cached results
+    # Display results and download
     data = st.session_state.processed_data[file_id]
     st.download_button(
         label="📥 Download Results CSV",
