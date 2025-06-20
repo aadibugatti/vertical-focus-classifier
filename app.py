@@ -7,11 +7,18 @@ import anthropic
 from datetime import datetime
 import threading
 import time
-import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
 
-
+# SESSION STATE INIT
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "input_tokens" not in st.session_state:
+    st.session_state.input_tokens = 0
+if "output_tokens" not in st.session_state:
+    st.session_state.output_tokens = 0
+if "processed_df" not in st.session_state:
+    st.session_state.processed_df = None
 
 # CONFIG
 CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"]
@@ -20,13 +27,6 @@ MAX_WORKERS = 5
 PASSWORD = st.secrets["APP_PASSWORD"]
 
 client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
-
-# THREAD-SAFE GLOBALS
-if "input_tokens" not in st.session_state:
-    st.session_state.input_tokens = 0
-if "output_tokens" not in st.session_state:
-    st.session_state.output_tokens = 0
-
 token_lock = threading.Lock()
 
 # PROMPTS
@@ -59,10 +59,7 @@ def add_token_usage(response):
             st.session_state.input_tokens += response.usage.input_tokens
             st.session_state.output_tokens += response.usage.output_tokens
 
-
-def call_claude(prompt):
-    global total_input_tokens, total_output_tokens
-
+def call_claude(prompt, retries=2):
     response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=200,
@@ -71,11 +68,9 @@ def call_claude(prompt):
     )
     add_token_usage(response)
     output = response.content[0].text.strip()
-
-    if len(output) > 50:
+    if len(output) > 50 and retries > 0:
         time.sleep(1)
-        return call_claude(prompt)
-
+        return call_claude(prompt, retries - 1)
     return output
 
 def get_visible_text(url):
@@ -115,10 +110,8 @@ def get_full_site_content(base_url):
 def classify_website(i, url, df):
     if not url.lower().startswith(('http://', 'https://')):
         url = 'https://' + url
-
     try:
         content = get_full_site_content(url)
-
         if content and len(content.split()) >= 30:
             trimmed = ' '.join(content.split()[:800])
             prompt = classification_prompt.format(content=trimmed)
@@ -127,11 +120,9 @@ def classify_website(i, url, df):
                 vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
         else:
             vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
-
         result = vertical if vertical and vertical != "ERROR" else "GENERATION ERROR"
     except Exception as e:
         result = f"[ERROR]: {e}"
-
     df.at[i, "Vertical Focus Claude"] = result
 
 # STREAMLIT UI
@@ -139,9 +130,6 @@ st.title("Vertical Focus Classifier")
 st.markdown("Upload a CSV with a column called `Account: Website` to classify each website by industry vertical.")
 
 # Password protection
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
 if not st.session_state.authenticated:
     password = st.text_input("Enter password", type="password")
     if password == PASSWORD:
@@ -152,11 +140,10 @@ if not st.session_state.authenticated:
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
 if uploaded_file:
-    if "processed_df" not in st.session_state:
+    if st.session_state.processed_df is None:
         df = pd.read_csv(uploaded_file)
         if "Vertical Focus Claude" not in df.columns:
             df["Vertical Focus Claude"] = ''
-
         with st.spinner("Processing websites..."):
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 futures = []
@@ -164,50 +151,33 @@ if uploaded_file:
                     url = str(row["Account: Website"]).strip()
                     if url and url != 'nan':
                         futures.append(executor.submit(classify_website, i, url, df))
-        
-                progress_text = st.empty()
-                progress_bar = st.progress(0)
-                
                 total = len(futures)
+                progress_bar = st.progress(0)
+                progress_text = st.empty()
                 completed = 0
                 start_time = time.time()
-                
                 for future in as_completed(futures):
                     future.result()
                     completed += 1
                     elapsed = time.time() - start_time
                     avg_time = elapsed / completed
                     est_remaining = int(avg_time * (total - completed))
-                
                     progress_bar.progress(completed / total)
-                    progress_text.markdown(
-                        f"**{completed}/{total} completed** ⏳ _Estimated time left: {est_remaining} sec_"
-                    )
-                
+                    progress_text.markdown(f"**{completed}/{total} completed** ⏳ _Estimated time left: {est_remaining} sec_")
                 progress_text.markdown("✅ **All tasks completed!**")
-
-        
-        st.session_state["processed_df"] = df
+        st.session_state.processed_df = df
     else:
-        df = st.session_state["processed_df"]
+        df = st.session_state.processed_df
 
-    st.success("Processing complete.")
     buffer = io.BytesIO()
     df.to_csv(buffer, index=False)
     buffer.seek(0)
-
-    st.download_button(
-        label="📥 Download Results CSV",
-        data=buffer,
-        file_name="output.csv",
-        mime="text/csv"
-    )
-
+    st.download_button("📥 Download Results CSV", buffer, "classified_output.csv", "text/csv")
 
     input_cost = (st.session_state.input_tokens / 1_000_000) * 3
     output_cost = (st.session_state.output_tokens / 1_000_000) * 15
     total_cost = input_cost + output_cost
-    
+
     st.markdown(f"**Input Tokens:** {st.session_state.input_tokens:,}")
     st.markdown(f"**Output Tokens:** {st.session_state.output_tokens:,}")
     st.markdown(f"**Estimated Claude API Cost:** `${total_cost:.4f}`")
