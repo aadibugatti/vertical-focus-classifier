@@ -7,9 +7,8 @@ import anthropic
 from datetime import datetime
 import threading
 import time
-import hashlib
+import random
 from concurrent.futures import ThreadPoolExecutor
-import concurrent.futures
 import io
 
 # CONFIG
@@ -21,6 +20,8 @@ PASSWORD = st.secrets["APP_PASSWORD"]
 client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
 # THREAD-SAFE GLOBALS
+total_input_tokens = 0
+total_output_tokens = 0
 token_lock = threading.Lock()
 
 # PROMPTS
@@ -44,38 +45,19 @@ Return ONLY the vertical focus term (e.g., "Self Storage", "Outdoor Hospitality"
 URL: {url}
 """
 
-# Streamlit UI
-st.title("Vertical Focus Classifier")
-st.markdown("Upload a CSV with a column called `Account: Website` to classify each website by industry vertical.")
+def estimate_tokens(text):
+    return len(text) // 4
 
-# Authentication
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    password = st.text_input("Enter password", type="password")
-    if password == PASSWORD:
-        st.session_state.authenticated = True
-    else:
-        st.stop()
-
-# 🔧 Ensure session state variables are initialized before threads use them
-if "total_input_tokens" not in st.session_state:
-    st.session_state.total_input_tokens = 0
-if "total_output_tokens" not in st.session_state:
-    st.session_state.total_output_tokens = 0
-if "processed_data" not in st.session_state:
-    st.session_state.processed_data = {}
-
-# Token usage tracking
 def add_token_usage(response):
+    global total_input_tokens, total_output_tokens
     if hasattr(response, "usage"):
         with token_lock:
-            st.session_state.total_input_tokens += response.usage.input_tokens
-            st.session_state.total_output_tokens += response.usage.output_tokens
+            total_input_tokens += response.usage.input_tokens
+            total_output_tokens += response.usage.output_tokens
 
-# Claude call
 def call_claude(prompt):
+    global total_input_tokens, total_output_tokens
+
     response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=200,
@@ -84,12 +66,13 @@ def call_claude(prompt):
     )
     add_token_usage(response)
     output = response.content[0].text.strip()
+
     if len(output) > 50:
         time.sleep(1)
         return call_claude(prompt)
+
     return output
 
-# Scraping helpers
 def get_visible_text(url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -124,13 +107,13 @@ def get_full_site_content(base_url):
     except:
         return None
 
-# Main classifier
 def classify_website(i, url, df):
     if not url.lower().startswith(('http://', 'https://')):
         url = 'https://' + url
 
     try:
         content = get_full_site_content(url)
+
         if content and len(content.split()) >= 30:
             trimmed = ' '.join(content.split()[:800])
             prompt = classification_prompt.format(content=trimmed)
@@ -139,89 +122,80 @@ def classify_website(i, url, df):
                 vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
         else:
             vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
+
         result = vertical if vertical and vertical != "ERROR" else "GENERATION ERROR"
     except Exception as e:
         result = f"[ERROR]: {e}"
 
     df.at[i, "Vertical Focus Claude"] = result
 
-# File uploader
+# STREAMLIT UI
+st.title("Vertical Focus Classifier")
+st.markdown("Upload a CSV with a column called `Account: Website` to classify each website by industry vertical.")
+
+# Password protection
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    password = st.text_input("Enter password", type="password")
+    if password == PASSWORD:
+        st.session_state.authenticated = True
+    else:
+        st.stop()
+
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
-# File hashing
-def file_hash(file_obj):
-    return hashlib.md5(file_obj.read()).hexdigest()
-
 if uploaded_file:
-    uploaded_file.seek(0)
-    file_id = file_hash(uploaded_file)
-    uploaded_file.seek(0)
-
-    if file_id not in st.session_state.processed_data:
+    if "processed_df" not in st.session_state:
         df = pd.read_csv(uploaded_file)
         if "Vertical Focus Claude" not in df.columns:
             df["Vertical Focus Claude"] = ''
 
-        # Reset token counts before processing
-        st.session_state.total_input_tokens = 0
-        st.session_state.total_output_tokens = 0
+        total_urls = len(df)
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        start_time = time.time()
 
-        with st.spinner("Classifying websites..."):
-            urls_to_process = [
-                (i, str(row["Account: Website"]).strip())
-                for i, row in df.iterrows()
-                if str(row["Account: Website"]).strip().lower() != 'nan'
-            ]
-            total_urls = len(urls_to_process)
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            start_time = time.time()
-
-            def update_progress(completed):
-                elapsed = time.time() - start_time
-                avg_time = elapsed / completed if completed else 0
-                eta = int(avg_time * (total_urls - completed))
-                eta_str = time.strftime('%M:%S', time.gmtime(eta))
-                status_text.text(f"Processed {completed}/{total_urls} — ETA: {eta_str}")
-                progress_bar.progress(completed / total_urls)
-
+        with st.spinner("Processing websites..."):
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                futures = {
-                    executor.submit(classify_website, i, url, df): idx
-                    for idx, (i, url) in enumerate(urls_to_process)
-                }
-                for completed, future in enumerate(concurrent.futures.as_completed(futures), 1):
+                futures = []
+                for i, row in df.iterrows():
+                    url = str(row["Account: Website"]).strip()
+                    if url and url != 'nan':
+                        futures.append((i, url, executor.submit(classify_website, i, url, df)))
+
+                for count, (i, url, future) in enumerate(futures):
                     future.result()
-                    update_progress(completed)
+                    elapsed = int(time.time() - start_time)
+                    remaining = int((elapsed / (count + 1)) * (total_urls - count - 1)) if count > 0 else 0
+                    status_text.text(f"Processed {count + 1}/{total_urls} | ~{remaining}s remaining")
+                    progress_bar.progress((count + 1) / total_urls)
 
-            # Cache result
-            buffer = io.BytesIO()
-            df.to_csv(buffer, index=False)
-            buffer.seek(0)
-            st.session_state.processed_data[file_id] = {
-                "df": df,
-                "csv": buffer,
-                "input_tokens": st.session_state.total_input_tokens,
-                "output_tokens": st.session_state.total_output_tokens,
-                "timestamp": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }
+        st.session_state.processed_df = df
+        st.session_state.token_stats = (total_input_tokens, total_output_tokens)
+
     else:
-        st.success("Using cached results from previous run.")
+        df = st.session_state.processed_df
+        total_input_tokens, total_output_tokens = st.session_state.token_stats
 
-    # Display results and download
-    data = st.session_state.processed_data[file_id]
+    st.success("Processing complete.")
+    buffer = io.BytesIO()
+    df.to_csv(buffer, index=False)
+    buffer.seek(0)
+
     st.download_button(
         label="📥 Download Results CSV",
-        data=data["csv"],
+        data=buffer,
         file_name="classified_output.csv",
         mime="text/csv"
     )
 
-    input_cost = (data["input_tokens"] / 1_000_000) * 3
-    output_cost = (data["output_tokens"] / 1_000_000) * 15
+    input_cost = (total_input_tokens / 1_000_000) * 3
+    output_cost = (total_output_tokens / 1_000_000) * 15
     total_cost = input_cost + output_cost
 
-    st.markdown(f"**Input Tokens:** {data['input_tokens']:,}")
-    st.markdown(f"**Output Tokens:** {data['output_tokens']:,}")
+    st.markdown(f"**Input Tokens:** {total_input_tokens:,}")
+    st.markdown(f"**Output Tokens:** {total_output_tokens:,}")
     st.markdown(f"**Estimated Claude API Cost:** `${total_cost:.4f}`")
-    st.markdown(f"**Timestamp:** {data['timestamp']}")
+    st.markdown(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
