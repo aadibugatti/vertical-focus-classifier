@@ -151,15 +151,32 @@ if uploaded_file:
     if "Vertical Focus Claude" not in df.columns:
         df["Vertical Focus Claude"] = ''
 
-    with st.spinner("Processing websites..."):
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = []
-            for i, row in df.iterrows():
-                url = str(row["Account: Website"]).strip()
-                if url and url != 'nan':
-                    futures.append(executor.submit(classify_website, i, url, df))
-            for future in futures:
-                future.result()
+        with st.spinner("Initializing..."):
+            urls_to_process = [
+                (i, str(row["Account: Website"]).strip())
+                for i, row in df.iterrows()
+                if str(row["Account: Website"]).strip() and str(row["Account: Website"]).strip().lower() != 'nan'
+            ]
+            total_urls = len(urls_to_process)
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            start_time = time.time()
+
+            def update_progress(completed):
+                elapsed = time.time() - start_time
+                avg_time_per_item = elapsed / completed if completed else 0
+                remaining = total_urls - completed
+                eta = int(avg_time_per_item * remaining)
+                eta_str = time.strftime('%M:%S', time.gmtime(eta))
+                status_text.text(f"Processed {completed}/{total_urls} — ETA: {eta_str}")
+                progress_bar.progress(completed / total_urls)
+    
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                futures = {executor.submit(classify_website, i, url, df): idx for idx, (i, url) in enumerate(urls_to_process)}
+                for completed, future in enumerate(concurrent.futures.as_completed(futures), 1):
+                    future.result()
+                    update_progress(completed)
 
     st.success("Processing complete.")
     buffer = io.BytesIO()
