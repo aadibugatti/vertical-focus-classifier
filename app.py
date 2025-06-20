@@ -20,8 +20,11 @@ PASSWORD = st.secrets["APP_PASSWORD"]
 client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
 # THREAD-SAFE GLOBALS
-total_input_tokens = 0
-total_output_tokens = 0
+if "input_tokens" not in st.session_state:
+    st.session_state.input_tokens = 0
+if "output_tokens" not in st.session_state:
+    st.session_state.output_tokens = 0
+
 token_lock = threading.Lock()
 
 # PROMPTS
@@ -49,11 +52,11 @@ def estimate_tokens(text):
     return len(text) // 4
 
 def add_token_usage(response):
-    global total_input_tokens, total_output_tokens
     if hasattr(response, "usage"):
         with token_lock:
-            total_input_tokens += response.usage.input_tokens
-            total_output_tokens += response.usage.output_tokens
+            st.session_state.input_tokens += response.usage.input_tokens
+            st.session_state.output_tokens += response.usage.output_tokens
+
 
 def call_claude(prompt):
     global total_input_tokens, total_output_tokens
@@ -179,11 +182,11 @@ if uploaded_file:
     )
 
 
-    input_cost = (total_input_tokens / 1_000_000) * 3
-    output_cost = (total_output_tokens / 1_000_000) * 15
+    input_cost = (st.session_state.input_tokens / 1_000_000) * 3
+    output_cost = (st.session_state.output_tokens / 1_000_000) * 15
     total_cost = input_cost + output_cost
-
-    st.markdown(f"**Input Tokens:** {total_input_tokens:,}")
-    st.markdown(f"**Output Tokens:** {total_output_tokens:,}")
+    
+    st.markdown(f"**Input Tokens:** {st.session_state.input_tokens:,}")
+    st.markdown(f"**Output Tokens:** {st.session_state.output_tokens:,}")
     st.markdown(f"**Estimated Claude API Cost:** `${total_cost:.4f}`")
     st.markdown(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
