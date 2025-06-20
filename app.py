@@ -20,11 +20,8 @@ PASSWORD = st.secrets["APP_PASSWORD"]
 client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
 # THREAD-SAFE GLOBALS
-if "input_tokens" not in st.session_state:
-    st.session_state.input_tokens = 0
-if "output_tokens" not in st.session_state:
-    st.session_state.output_tokens = 0
-
+total_input_tokens = 0
+total_output_tokens = 0
 token_lock = threading.Lock()
 
 # PROMPTS
@@ -52,11 +49,11 @@ def estimate_tokens(text):
     return len(text) // 4
 
 def add_token_usage(response):
+    global total_input_tokens, total_output_tokens
     if hasattr(response, "usage"):
         with token_lock:
-            st.session_state.input_tokens += response.usage.input_tokens
-            st.session_state.output_tokens += response.usage.output_tokens
-
+            total_input_tokens += response.usage.input_tokens
+            total_output_tokens += response.usage.output_tokens
 
 def call_claude(prompt):
     global total_input_tokens, total_output_tokens
@@ -150,24 +147,19 @@ if not st.session_state.authenticated:
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
 if uploaded_file:
-    if "processed_df" not in st.session_state:
-        df = pd.read_csv(uploaded_file)
-        if "Vertical Focus Claude" not in df.columns:
-            df["Vertical Focus Claude"] = ''
+    df = pd.read_csv(uploaded_file)
+    if "Vertical Focus Claude" not in df.columns:
+        df["Vertical Focus Claude"] = ''
 
-        with st.spinner("Processing websites..."):
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                futures = []
-                for i, row in df.iterrows():
-                    url = str(row["Account: Website"]).strip()
-                    if url and url != 'nan':
-                        futures.append(executor.submit(classify_website, i, url, df))
-                for future in futures:
-                    future.result()
-
-        st.session_state["processed_df"] = df
-    else:
-        df = st.session_state["processed_df"]
+    with st.spinner("Processing websites..."):
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = []
+            for i, row in df.iterrows():
+                url = str(row["Account: Website"]).strip()
+                if url and url != 'nan':
+                    futures.append(executor.submit(classify_website, i, url, df))
+            for future in futures:
+                future.result()
 
     st.success("Processing complete.")
     buffer = io.BytesIO()
@@ -182,11 +174,11 @@ if uploaded_file:
     )
 
 
-    input_cost = (st.session_state.input_tokens / 1_000_000) * 3
-    output_cost = (st.session_state.output_tokens / 1_000_000) * 15
+    input_cost = (total_input_tokens / 1_000_000) * 3
+    output_cost = (total_output_tokens / 1_000_000) * 15
     total_cost = input_cost + output_cost
-    
-    st.markdown(f"**Input Tokens:** {st.session_state.input_tokens:,}")
-    st.markdown(f"**Output Tokens:** {st.session_state.output_tokens:,}")
+
+    st.markdown(f"**Input Tokens:** {total_input_tokens:,}")
+    st.markdown(f"**Output Tokens:** {total_output_tokens:,}")
     st.markdown(f"**Estimated Claude API Cost:** `${total_cost:.4f}`")
     st.markdown(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
