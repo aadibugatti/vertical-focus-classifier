@@ -199,7 +199,7 @@ if uploaded_file:
     st.download_button(
         label="📥 Download Results CSV",
         data=buffer,
-        file_name="classified_output.csv",
+        file_name="output.csv",
         mime="text/csv"
     )
 
