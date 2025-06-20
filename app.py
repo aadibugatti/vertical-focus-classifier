@@ -10,7 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
 
-# SESSION STATE INIT
+# ✅ SESSION STATE INIT (must come first!)
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
 if "input_tokens" not in st.session_state:
@@ -49,9 +49,6 @@ Return ONLY the vertical focus term (e.g., "Self Storage", "Outdoor Hospitality"
 
 URL: {url}
 """
-
-def estimate_tokens(text):
-    return len(text) // 4
 
 def add_token_usage(response):
     if hasattr(response, "usage"):
