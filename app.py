@@ -8,8 +8,10 @@ from datetime import datetime
 import threading
 import time
 import random
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import io
+
+
 
 # CONFIG
 CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"]
@@ -156,15 +158,35 @@ if uploaded_file:
             df["Vertical Focus Claude"] = ''
 
         with st.spinner("Processing websites..."):
-            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                futures = []
-                for i, row in df.iterrows():
-                    url = str(row["Account: Website"]).strip()
-                    if url and url != 'nan':
-                        futures.append(executor.submit(classify_website, i, url, df))
-                for future in futures:
-                    future.result()
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
+        for i, row in df.iterrows():
+            url = str(row["Account: Website"]).strip()
+            if url and url != 'nan':
+                futures.append(executor.submit(classify_website, i, url, df))
 
+        progress_text = st.empty()
+        progress_bar = st.progress(0)
+        
+        total = len(futures)
+        completed = 0
+        start_time = time.time()
+        
+        for future in as_completed(futures):
+            future.result()
+            completed += 1
+            elapsed = time.time() - start_time
+            avg_time = elapsed / completed
+            est_remaining = int(avg_time * (total - completed))
+        
+            progress_bar.progress(completed / total)
+            progress_text.markdown(
+                f"**{completed}/{total} completed** ⏳ _Estimated time left: {est_remaining} sec_"
+            )
+        
+        progress_text.markdown("✅ **All tasks completed!**")
+
+        
         st.session_state["processed_df"] = df
     else:
         df = st.session_state["processed_df"]
