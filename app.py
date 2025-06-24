@@ -2,13 +2,13 @@ import streamlit as st
 import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 import anthropic
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import threading
 import time
 import random
-from concurrent.futures import ThreadPoolExecutor
 import io
 
 # CONFIG
@@ -23,6 +23,8 @@ client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 total_input_tokens = 0
 total_output_tokens = 0
 token_lock = threading.Lock()
+df_lock = threading.Lock()
+api_semaphore = threading.Semaphore(2)
 
 # PROMPTS
 classification_prompt = """Given the following company website content, identify the company's vertical focus in 1–5 words using common industry terms or acronyms (e.g., "HOA", "VAR").
@@ -56,8 +58,6 @@ def add_token_usage(response):
             total_output_tokens += response.usage.output_tokens
 
 def call_claude(prompt):
-    global total_input_tokens, total_output_tokens
-
     response = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=200,
@@ -73,37 +73,31 @@ def call_claude(prompt):
 
     return output
 
-def get_visible_text(url):
+def is_visible(tag):
+    return tag.name == 'p' and tag.get_text(strip=True) and len(tag.get_text(strip=True)) > 40
+
+def clean_text(text_list):
+    return '\n\n'.join([t.strip() for t in text_list if len(t.strip()) > 40])
+
+def extract_main_text(base_url):
     try:
         headers = {"User-Agent": "Mozilla/5.0"}
-        res = requests.get(url, headers=headers, timeout=1)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for s in soup(['script', 'style', 'noscript']):
-            s.decompose()
-        return ' '.join(soup.stripped_strings)
-    except:
+        fallback_paths = ['/about', '/services', '/what-we-do', '/who-we-are', '']
+        for path in fallback_paths:
+            try:
+                target_url = urljoin(base_url, path)
+                response = requests.get(target_url, timeout=5, headers=headers)
+                if response.status_code != 200:
+                    continue
+                soup = BeautifulSoup(response.text, 'html.parser')
+                content = soup.find('main') or max(soup.find_all('div'), key=lambda d: len(d.get_text(strip=True)), default=soup)
+                paragraphs = content.find_all(is_visible)
+                text = clean_text([p.get_text() for p in paragraphs])
+                if len(text) > 300:
+                    return text
+            except:
+                continue
         return None
-
-def get_full_site_content(base_url):
-    try:
-        combined_text = get_visible_text(base_url)
-        if not combined_text:
-            return None
-        res = requests.get(base_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=1)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        found_links = set()
-        for a in soup.find_all('a', href=True):
-            href = a['href'].lower()
-            if any(kw in href for kw in ['about', 'services', 'what-we-do', 'who-we-are']):
-                full_url = urljoin(base_url, href)
-                domain = urlparse(base_url).netloc
-                if domain in urlparse(full_url).netloc:
-                    found_links.add(full_url)
-        for link in found_links:
-            page_text = get_visible_text(link)
-            if page_text:
-                combined_text += '\n' + page_text
-        return combined_text
     except:
         return None
 
@@ -111,23 +105,28 @@ def classify_website(i, url, df):
     if not url.lower().startswith(('http://', 'https://')):
         url = 'https://' + url
 
-    try:
-        content = get_full_site_content(url)
-
-        if content and len(content.split()) >= 30:
-            trimmed = ' '.join(content.split()[:800])
-            prompt = classification_prompt.format(content=trimmed)
-            vertical = call_claude(prompt)
-            if vertical == "ERROR":
+    with api_semaphore:
+        try:
+            content = extract_main_text(url)
+            if content and len(content.split()) >= 30:
+                trimmed = ' '.join(content.split()[:800])
+                prompt = classification_prompt.format(content=trimmed)
+                vertical = call_claude(prompt)
+                if vertical == "ERROR":
+                    vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
+            else:
                 vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
-        else:
-            vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
 
-        result = vertical if vertical and vertical != "ERROR" else "GENERATION ERROR"
-    except Exception as e:
-        result = f"[ERROR]: {e}"
+            result = vertical if vertical and vertical != "ERROR" else "GENERATION ERROR"
+        except Exception as e:
+            result = f"[ERROR] {url}: {e}"
+            content = ''
 
-    df.at[i, "Vertical Focus Claude"] = result
+        with df_lock:
+            df.at[i, 'Vertical Focus Claude'] = result
+            df.at[i, 'Website Content'] = content if content else ''
+
+        time.sleep(random.uniform(0.5, 1.5))
 
 # STREAMLIT UI
 st.title("Vertical Focus Classifier")
@@ -149,8 +148,13 @@ uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 if uploaded_file:
     if "processed_df" not in st.session_state:
         df = pd.read_csv(uploaded_file)
-        if "Vertical Focus Claude" not in df.columns:
-            df["Vertical Focus Claude"] = ''
+        if 'Vertical Focus Claude' not in df.columns:
+            df['Vertical Focus Claude'] = ''
+        if 'Website Content' not in df.columns:
+            df['Website Content'] = ''
+
+        df['Vertical Focus Claude'] = df['Vertical Focus Claude'].astype(str)
+        df['Website Content'] = df['Website Content'].astype(str)
 
         total_urls = len(df)
         progress_bar = st.progress(0)
@@ -163,9 +167,9 @@ if uploaded_file:
                 for i, row in df.iterrows():
                     url = str(row["Account: Website"]).strip()
                     if url and url != 'nan':
-                        futures.append((i, url, executor.submit(classify_website, i, url, df)))
+                        futures.append(executor.submit(classify_website, i, url, df))
 
-                for count, (i, url, future) in enumerate(futures):
+                for count, future in enumerate(as_completed(futures)):
                     future.result()
                     elapsed = int(time.time() - start_time)
                     remaining = int((elapsed / (count + 1)) * (total_urls - count - 1)) if count > 0 else 0
