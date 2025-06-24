@@ -13,7 +13,7 @@ import io
 from PIL import Image
 
 logo = Image.open("images/Housatonic_Partners_Logo.jpg")
-st.image(logo, width=300)
+st.image(logo, width=500)
 
 # CONFIG
 CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"]
