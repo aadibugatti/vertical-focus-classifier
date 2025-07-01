@@ -168,8 +168,19 @@ if uploaded_file:
         with st.spinner("Processing websites..."):
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 futures = []
+                # Detect which column to use for URLs
+                url_column = None
+                for candidate in ["Account: Website", "URL"]:
+                    if candidate in df.columns:
+                        url_column = candidate
+                        break
+                
+                if not url_column:
+                    st.error("CSV must contain a column named either 'Account: Website' or 'URL'.")
+                    st.stop()
+                
                 for i, row in df.iterrows():
-                    url = str(row["Account: Website"]).strip()
+                    url = str(row[url_column]).strip()
                     if url and url != 'nan':
                         futures.append(executor.submit(classify_website, i, url, df))
 
