@@ -3,7 +3,7 @@ import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
-import anthropic
+from openai import OpenAI
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import threading
@@ -16,12 +16,12 @@ logo = Image.open("images/Housatonic_Partners_Logo.jpg")
 st.image(logo, width=500)
 
 # CONFIG
-CLAUDE_API_KEY = st.secrets["CLAUDE_API_KEY"]
-CLAUDE_MODEL = "claude-sonnet-4-20250514"
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+OPENAI_MODEL = "gpt-4o-mini"  # Cost-effective model, change to "gpt-4o" if needed
 MAX_WORKERS = 5
 PASSWORD = st.secrets["APP_PASSWORD"]
 
-client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # THREAD-SAFE GLOBALS
 total_input_tokens = 0
@@ -58,24 +58,28 @@ def add_token_usage(response):
     global total_input_tokens, total_output_tokens
     if hasattr(response, "usage"):
         with token_lock:
-            total_input_tokens += response.usage.input_tokens
-            total_output_tokens += response.usage.output_tokens
+            total_input_tokens += response.usage.prompt_tokens
+            total_output_tokens += response.usage.completion_tokens
 
-def call_claude(prompt):
-    response = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=200,
-        temperature=0,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    add_token_usage(response)
-    output = response.content[0].text.strip()
+def call_openai(prompt):
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=100
+        )
+        add_token_usage(response)
+        output = response.choices[0].message.content.strip()
 
-    if len(output) > 50:
-        time.sleep(1)
-        return call_claude(prompt)
+        if len(output) > 50:
+            time.sleep(1)
+            return call_openai(prompt)
 
-    return output
+        return output
+    except Exception as e:
+        print(f"[API ERROR] {e}")
+        return "GENERATION ERROR"
 
 def is_visible(tag):
     return tag.name == 'p' and tag.get_text(strip=True) and len(tag.get_text(strip=True)) > 40
@@ -115,11 +119,11 @@ def classify_website(i, url, df):
             if content and len(content.split()) >= 30:
                 trimmed = ' '.join(content.split()[:800])
                 prompt = classification_prompt.format(content=trimmed)
-                vertical = call_claude(prompt)
+                vertical = call_openai(prompt)
                 if vertical == "ERROR":
-                    vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
+                    vertical = call_openai(url_fallback_prompt.format(url=url)) + " *"
             else:
-                vertical = call_claude(url_fallback_prompt.format(url=url)) + " *"
+                vertical = call_openai(url_fallback_prompt.format(url=url)) + " *"
 
             result = vertical if vertical and vertical != "ERROR" else "GENERATION ERROR"
         except Exception as e:
@@ -127,7 +131,7 @@ def classify_website(i, url, df):
             content = ''
 
         with df_lock:
-            df.at[i, 'Vertical Focus Claude'] = result
+            df.at[i, 'Vertical Focus OpenAI'] = result
             df.at[i, 'Website Content'] = content if content else ''
 
         time.sleep(random.uniform(0.5, 1.5))
@@ -152,12 +156,12 @@ uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 if uploaded_file:
     if "processed_df" not in st.session_state:
         df = pd.read_csv(uploaded_file)
-        if 'Vertical Focus Claude' not in df.columns:
-            df['Vertical Focus Claude'] = ''
+        if 'Vertical Focus OpenAI' not in df.columns:
+            df['Vertical Focus OpenAI'] = ''
         if 'Website Content' not in df.columns:
             df['Website Content'] = ''
 
-        df['Vertical Focus Claude'] = df['Vertical Focus Claude'].astype(str)
+        df['Vertical Focus OpenAI'] = df['Vertical Focus OpenAI'].astype(str)
         df['Website Content'] = df['Website Content'].astype(str)
 
         total_urls = len(df)
@@ -210,11 +214,13 @@ if uploaded_file:
         mime="text/csv"
     )
 
-    input_cost = (total_input_tokens / 1_000_000) * 3
-    output_cost = (total_output_tokens / 1_000_000) * 15
+    # Updated cost calculation for OpenAI pricing
+    # GPT-4o-mini pricing: $0.15 per 1M input tokens, $0.60 per 1M output tokens
+    input_cost = (total_input_tokens / 1_000_000) * 0.15
+    output_cost = (total_output_tokens / 1_000_000) * 0.60
     total_cost = input_cost + output_cost
 
     st.markdown(f"**Input Tokens:** {total_input_tokens:,}")
     st.markdown(f"**Output Tokens:** {total_output_tokens:,}")
-    st.markdown(f"**Estimated Claude API Cost:** `${total_cost:.4f}`")
+    st.markdown(f"**Estimated OpenAI API Cost:** `${total_cost:.4f}`")
     st.markdown(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
