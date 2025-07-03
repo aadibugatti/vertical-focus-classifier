@@ -1,5 +1,6 @@
 streamlit
 pandas
-beautifulsoup4
 requests
-anthropic
+beautifulsoup4
+openai
+pillow
