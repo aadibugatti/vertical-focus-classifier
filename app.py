@@ -84,12 +84,9 @@ def create_company_query_prompt(website_contents, user_question):
                                 for i, content in enumerate(website_contents)])
     
     return f"""
-You are a business analysis expert. Based on the website content provided below, I need you to determine which companies match the following criteria: "{user_question}"
+You are a business analysis expert. Based on the website content provided below, answer this question: "{user_question}"
 
-Analyze each company's website content and determine if it matches the user's question. Consider:
-- Direct matches to the criteria
-- Companies that clearly fit the description
-- Be reasonably strict - only include companies that genuinely match
+For each numbered website content entry, determine if the company matches the criteria in the question. Be inclusive rather than overly strict - if a company reasonably fits the description, include it.
 
 Here are the website contents to analyze:
 {content_entries}
@@ -199,13 +196,31 @@ def classify_companies_by_query(website_contents, user_question):
     
     try:
         response = call_openai(prompt, max_tokens=1000)
-        results = json.loads(response)
         
+        # Try to parse JSON
+        try:
+            results = json.loads(response)
+        except json.JSONDecodeError:
+            # Try to find JSON array in response
+            import re
+            json_match = re.search(r'\[[\s\S]*?\]', response)
+            if json_match:
+                try:
+                    json_str = json_match.group(0)
+                    results = json.loads(json_str)
+                except:
+                    return [False] * len(website_contents)
+            else:
+                return [False] * len(website_contents)
+        
+        # Validate results
         if not isinstance(results, list) or len(results) != len(website_contents):
             return [False] * len(website_contents)
         
+        # Convert to boolean
         return [bool(r) for r in results]
-    except json.JSONDecodeError:
+        
+    except Exception as e:
         return [False] * len(website_contents)
 
 def clean_vertical_entry(entry):
