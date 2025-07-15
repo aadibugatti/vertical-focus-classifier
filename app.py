@@ -84,12 +84,9 @@ def create_company_query_prompt(website_contents, user_question):
                                 for i, content in enumerate(website_contents)])
     
     return f"""
-You are a business analysis expert. Based on the website content provided below, I need you to determine which companies match the following criteria: "{user_question}"
+You are a business analysis expert. Based on the website content provided below, answer this question: "{user_question}"
 
-Analyze each company's website content and determine if it matches the user's question. Consider:
-- Direct matches to the criteria
-- Companies that clearly fit the description
-- Be reasonably strict - only include companies that genuinely match
+For each numbered website content entry, determine if the company matches the criteria in the question. Be inclusive rather than overly strict - if a company reasonably fits the description, include it.
 
 Here are the website contents to analyze:
 {content_entries}
@@ -195,17 +192,66 @@ def classify_batch_for_filtering(entries, target_vertical):
 
 def classify_companies_by_query(website_contents, user_question):
     """Classify companies based on website content and user question"""
+    # Debug: Show what we're sending to OpenAI
+    st.write("**DEBUG: Sample website contents being analyzed:**")
+    for i, content in enumerate(website_contents[:3]):  # Show first 3 entries
+        preview = content[:200] + "..." if len(content) > 200 else content
+        st.write(f"Entry {i+1}: {preview}")
+    
     prompt = create_company_query_prompt(website_contents, user_question)
+    
+    # Debug: Show the prompt being sent
+    st.write("**DEBUG: Prompt being sent to OpenAI:**")
+    st.text_area("Prompt", prompt, height=200)
     
     try:
         response = call_openai(prompt, max_tokens=1000)
-        results = json.loads(response)
         
-        if not isinstance(results, list) or len(results) != len(website_contents):
+        # Debug: Show the raw response
+        st.write("**DEBUG: Raw OpenAI response:**")
+        st.write(f"Response: {response}")
+        
+        # Try to parse JSON
+        try:
+            results = json.loads(response)
+            st.write(f"**DEBUG: Parsed JSON results:** {results}")
+        except json.JSONDecodeError as e:
+            st.error(f"**DEBUG: JSON parsing failed:** {e}")
+            st.write("**DEBUG: Attempting to extract JSON from response...**")
+            
+            # Try to find JSON array in response
+            import re
+            json_match = re.search(r'\[[\s\S]*?\]', response)
+            if json_match:
+                try:
+                    json_str = json_match.group(0)
+                    results = json.loads(json_str)
+                    st.write(f"**DEBUG: Extracted JSON results:** {results}")
+                except:
+                    st.error("**DEBUG: Could not extract valid JSON from response**")
+                    return [False] * len(website_contents)
+            else:
+                st.error("**DEBUG: No JSON array found in response**")
+                return [False] * len(website_contents)
+        
+        # Validate results
+        if not isinstance(results, list):
+            st.error(f"**DEBUG: Results is not a list, got: {type(results)}**")
             return [False] * len(website_contents)
         
-        return [bool(r) for r in results]
-    except json.JSONDecodeError:
+        if len(results) != len(website_contents):
+            st.error(f"**DEBUG: Length mismatch - expected {len(website_contents)}, got {len(results)}**")
+            return [False] * len(website_contents)
+        
+        # Convert to boolean
+        boolean_results = [bool(r) for r in results]
+        st.write(f"**DEBUG: Final boolean results:** {boolean_results}")
+        st.write(f"**DEBUG: Number of True values:** {sum(boolean_results)}")
+        
+        return boolean_results
+        
+    except Exception as e:
+        st.error(f"**DEBUG: Exception in classify_companies_by_query:** {e}")
         return [False] * len(website_contents)
 
 def clean_vertical_entry(entry):
@@ -456,6 +502,11 @@ elif tool_option == "Company Query Tool":
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
         
+        # Debug: Show column info
+        st.write("**DEBUG: Available columns:**")
+        st.write(df.columns.tolist())
+        st.write("**DEBUG: DataFrame shape:**", df.shape)
+        
         # Column selection for website content
         column_options = list(df.columns)
         default_col = "Website Content" if "Website Content" in column_options else column_options[0]
@@ -465,6 +516,16 @@ elif tool_option == "Company Query Tool":
             column_options,
             index=column_options.index(default_col)
         )
+        
+        # Debug: Show sample data from selected column
+        st.write(f"**DEBUG: Sample data from '{selected_column}' column:**")
+        sample_data = df[selected_column].head(3)
+        for i, content in enumerate(sample_data):
+            if pd.notna(content):
+                preview = str(content)[:200] + "..." if len(str(content)) > 200 else str(content)
+                st.write(f"Row {i}: {preview}")
+            else:
+                st.write(f"Row {i}: [EMPTY/NaN]")
         
         # Question input
         user_question = st.text_input(
@@ -485,6 +546,10 @@ elif tool_option == "Company Query Tool":
             df[selected_column] = df[selected_column].apply(clean_content_entry)
             non_empty_df = df[df[selected_column] != ''].copy()
             
+            # Debug: Show filtering results
+            st.write(f"**DEBUG: Original DataFrame size:** {len(df)}")
+            st.write(f"**DEBUG: Non-empty DataFrame size:** {len(non_empty_df)}")
+            
             if len(non_empty_df) == 0:
                 st.error("No valid website content found in the selected column.")
                 st.stop()
@@ -498,6 +563,8 @@ elif tool_option == "Company Query Tool":
             content_list = non_empty_df[selected_column].tolist()
             total_batches = (len(content_list) + batch_size - 1) // batch_size
             
+            st.write(f"**DEBUG: Processing {len(content_list)} entries in {total_batches} batches**")
+            
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -508,15 +575,22 @@ elif tool_option == "Company Query Tool":
                     batch = content_list[i:i + batch_size]
                     batch_num = i // batch_size + 1
                     
+                    st.write(f"**DEBUG: Processing batch {batch_num}/{total_batches} with {len(batch)} entries**")
+                    
                     status_text.text(f"Processing batch {batch_num}/{total_batches}...")
                     
                     batch_results = classify_companies_by_query(batch, user_question)
                     all_matches.extend(batch_results)
                     
+                    st.write(f"**DEBUG: Batch {batch_num} results:** {batch_results}")
+                    
                     progress_bar.progress(batch_num / total_batches)
                     time.sleep(0.8)  # Slightly longer rate limiting for content analysis
             
             # Filter results
+            st.write(f"**DEBUG: Total matches collected:** {len(all_matches)}")
+            st.write(f"**DEBUG: All matches:** {all_matches}")
+            
             non_empty_df['chatgpt_match'] = all_matches
             matching_rows = non_empty_df[non_empty_df['chatgpt_match'] == True].copy()
             matching_rows = matching_rows.drop('chatgpt_match', axis=1)
