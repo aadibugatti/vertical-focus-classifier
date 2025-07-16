@@ -32,7 +32,58 @@ token_lock = threading.Lock()
 df_lock = threading.Lock()
 api_semaphore = threading.Semaphore(2)
 
-# CLASSIFICATION PROMPTS
+# SCRAPING FUNCTIONS
+def is_visible(tag):
+    return tag.name == 'p' and tag.get_text(strip=True) and len(tag.get_text(strip=True)) > 40
+
+def clean_text(text_list):
+    return '\n\n'.join([t.strip() for t in text_list if len(t.strip()) > 40])
+
+def extract_main_text(base_url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        fallback_paths = ['/about', '/services', '/what-we-do', '/who-we-are', '']
+        for path in fallback_paths:
+            try:
+                target_url = urljoin(base_url, path)
+                response = requests.get(target_url, timeout=5, headers=headers)
+                if response.status_code != 200:
+                    continue
+                soup = BeautifulSoup(response.text, 'html.parser')
+                content = soup.find('main') or max(soup.find_all('div'), key=lambda d: len(d.get_text(strip=True)), default=soup)
+                paragraphs = content.find_all(is_visible)
+                text = clean_text([p.get_text() for p in paragraphs])
+                if len(text) > 300:
+                    return text
+            except:
+                continue
+        return None
+    except:
+        return None
+
+def scrape_website(i, url, df, url_column):
+    if not url.lower().startswith(('http://', 'https://')):
+        url = 'https://' + url
+
+    try:
+        content = extract_main_text(url)
+        if content and len(content.split()) >= 30:
+            result = content
+            status = "SUCCESS"
+        else:
+            result = ""
+            status = "INSUFFICIENT_CONTENT"
+    except Exception as e:
+        result = ""
+        status = f"ERROR: {str(e)}"
+
+    with df_lock:
+        df.at[i, 'Website Content'] = result
+        df.at[i, 'Scrape Status'] = status
+
+    time.sleep(random.uniform(0.5, 1.5))
+
+# CLASSIFICATION FUNCTIONS
 classification_prompt = """Given the following company website content, identify the company's vertical focus in 1–5 words using common industry terms or acronyms (e.g., "HOA", "VAR").
 
 Avoid vague or overly broad categories. Be specific about the industry the company serves.
@@ -52,6 +103,51 @@ Return ONLY the vertical focus term (e.g., "Self Storage", "Outdoor Hospitality"
 
 URL: {url}
 """
+
+def estimate_tokens(text):
+    return len(text) // 4
+
+def add_token_usage(response):
+    global total_input_tokens, total_output_tokens
+    if hasattr(response, "usage"):
+        with token_lock:
+            total_input_tokens += response.usage.prompt_tokens
+            total_output_tokens += response.usage.completion_tokens
+
+def call_openai(prompt, max_tokens=100):
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=max_tokens
+        )
+        add_token_usage(response)
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        st.error(f"OpenAI API Error: {e}")
+        return "ERROR"
+
+def classify_content(i, content, url, df, content_column):
+    with api_semaphore:
+        try:
+            if content and len(content.split()) >= 30:
+                trimmed = ' '.join(content.split()[:800])
+                prompt = classification_prompt.format(content=trimmed)
+                vertical = call_openai(prompt)
+                if vertical == "ERROR":
+                    vertical = call_openai(url_fallback_prompt.format(url=url)) + " *"
+            else:
+                vertical = call_openai(url_fallback_prompt.format(url=url)) + " *"
+
+            result = vertical if vertical and vertical != "ERROR" else "GENERATION ERROR"
+        except Exception as e:
+            result = f"[ERROR] {str(e)}"
+
+        with df_lock:
+            df.at[i, 'Vertical Focus OpenAI'] = result
+
+        time.sleep(random.uniform(0.5, 1.5))
 
 # FILTERING PROMPTS
 def create_batch_filter_prompt(entries, target_vertical):
@@ -95,85 +191,6 @@ Please respond with ONLY a JSON array of true/false values, where true means the
 
 Example response format: [true, false, true, false, ...]
 """
-
-def estimate_tokens(text):
-    return len(text) // 4
-
-def add_token_usage(response):
-    global total_input_tokens, total_output_tokens
-    if hasattr(response, "usage"):
-        with token_lock:
-            total_input_tokens += response.usage.prompt_tokens
-            total_output_tokens += response.usage.completion_tokens
-
-def call_openai(prompt, max_tokens=100):
-    try:
-        response = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=max_tokens
-        )
-        add_token_usage(response)
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        st.error(f"OpenAI API Error: {e}")
-        return "ERROR"
-
-def is_visible(tag):
-    return tag.name == 'p' and tag.get_text(strip=True) and len(tag.get_text(strip=True)) > 40
-
-def clean_text(text_list):
-    return '\n\n'.join([t.strip() for t in text_list if len(t.strip()) > 40])
-
-def extract_main_text(base_url):
-    try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        fallback_paths = ['/about', '/services', '/what-we-do', '/who-we-are', '']
-        for path in fallback_paths:
-            try:
-                target_url = urljoin(base_url, path)
-                response = requests.get(target_url, timeout=5, headers=headers)
-                if response.status_code != 200:
-                    continue
-                soup = BeautifulSoup(response.text, 'html.parser')
-                content = soup.find('main') or max(soup.find_all('div'), key=lambda d: len(d.get_text(strip=True)), default=soup)
-                paragraphs = content.find_all(is_visible)
-                text = clean_text([p.get_text() for p in paragraphs])
-                if len(text) > 300:
-                    return text
-            except:
-                continue
-        return None
-    except:
-        return None
-
-def classify_website(i, url, df):
-    if not url.lower().startswith(('http://', 'https://')):
-        url = 'https://' + url
-
-    with api_semaphore:
-        try:
-            content = extract_main_text(url)
-            if content and len(content.split()) >= 30:
-                trimmed = ' '.join(content.split()[:800])
-                prompt = classification_prompt.format(content=trimmed)
-                vertical = call_openai(prompt)
-                if vertical == "ERROR":
-                    vertical = call_openai(url_fallback_prompt.format(url=url)) + " *"
-            else:
-                vertical = call_openai(url_fallback_prompt.format(url=url)) + " *"
-
-            result = vertical if vertical and vertical != "ERROR" else "GENERATION ERROR"
-        except Exception as e:
-            result = f"[ERROR] {url}: {e}"
-            content = ''
-
-        with df_lock:
-            df.at[i, 'Vertical Focus OpenAI'] = result
-            df.at[i, 'Website Content'] = content if content else ''
-
-        time.sleep(random.uniform(0.5, 1.5))
 
 def classify_batch_for_filtering(entries, target_vertical):
     """Classify a batch of vertical entries for filtering"""
@@ -256,17 +273,17 @@ st.subheader("Select a Tool")
 
 tool_option = st.selectbox(
     "Choose which tool you'd like to use:",
-    ["Vertical Focus Classifier", "Vertical Focus Filter", "Company Query Tool"]
+    ["Website Scraper", "Vertical Focus Classifier", "Vertical Focus Filter", "Company Query Tool"]
 )
 
 st.markdown("---")
 
-# TOOL 1: VERTICAL FOCUS CLASSIFIER
-if tool_option == "Vertical Focus Classifier":
-    st.header("🔍 Vertical Focus Classifier")
-    st.markdown("Upload a CSV with a column containing website URLs to classify each website by industry vertical.")
+# TOOL 1: WEBSITE SCRAPER
+if tool_option == "Website Scraper":
+    st.header("🌐 Website Scraper")
+    st.markdown("Upload a CSV with website URLs to scrape their content. This content can then be used in other tools.")
     
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="classifier_upload")
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="scraper_upload")
     
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
@@ -284,14 +301,11 @@ if tool_option == "Vertical Focus Classifier":
         remaining_columns = [col for col in column_options if col not in url_column_suggestions]
         ordered_columns = url_column_suggestions + remaining_columns
         
-        # Default to first suggestion or first column
-        default_col = ordered_columns[0] if ordered_columns else column_options[0]
-        
         selected_url_column = st.selectbox(
             "Select the column containing website URLs:",
             ordered_columns,
             index=0,
-            help="Choose the column that contains the website URLs you want to classify"
+            help="Choose the column that contains the website URLs you want to scrape"
         )
         
         # Show preview of selected column
@@ -304,19 +318,19 @@ if tool_option == "Vertical Focus Classifier":
             # Show count of non-empty URLs
             non_empty_urls = df[selected_url_column].dropna().astype(str)
             non_empty_urls = non_empty_urls[non_empty_urls.str.strip() != '']
-            st.info(f"Found {len(non_empty_urls)} non-empty URLs to process")
+            st.info(f"Found {len(non_empty_urls)} non-empty URLs to scrape")
         
         # Process button
-        if st.button("🚀 Start Classification", type="primary"):
-            if "processed_df" not in st.session_state:
+        if st.button("🚀 Start Scraping", type="primary"):
+            if "scraped_df" not in st.session_state:
                 # Add new columns if they don't exist
-                if 'Vertical Focus OpenAI' not in df.columns:
-                    df['Vertical Focus OpenAI'] = ''
                 if 'Website Content' not in df.columns:
                     df['Website Content'] = ''
+                if 'Scrape Status' not in df.columns:
+                    df['Scrape Status'] = ''
 
-                df['Vertical Focus OpenAI'] = df['Vertical Focus OpenAI'].astype(str)
                 df['Website Content'] = df['Website Content'].astype(str)
+                df['Scrape Status'] = df['Scrape Status'].astype(str)
 
                 # Filter out empty URLs
                 urls_to_process = df[df[selected_url_column].notna() & (df[selected_url_column].astype(str).str.strip() != '')].index.tolist()
@@ -330,35 +344,51 @@ if tool_option == "Vertical Focus Classifier":
                 status_text = st.empty()
                 start_time = time.time()
 
-                with st.spinner("Processing websites..."):
+                with st.spinner("Scraping websites..."):
                     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                         futures = []
                         
                         for i in urls_to_process:
                             url = str(df.at[i, selected_url_column]).strip()
                             if url and url != 'nan':
-                                futures.append(executor.submit(classify_website, i, url, df))
+                                futures.append(executor.submit(scrape_website, i, url, df, selected_url_column))
 
                         for count, future in enumerate(as_completed(futures)):
                             future.result()
                             elapsed = int(time.time() - start_time)
                             remaining = int((elapsed / (count + 1)) * (total_urls - count - 1)) if count > 0 else 0
-                            status_text.text(f"Processed {count + 1}/{total_urls} | ~{remaining}s remaining")
+                            status_text.text(f"Scraped {count + 1}/{total_urls} | ~{remaining}s remaining")
                             progress_bar.progress((count + 1) / total_urls)
 
-                st.session_state.processed_df = df
-                st.session_state.token_stats = (total_input_tokens, total_output_tokens)
+                st.session_state.scraped_df = df
 
             else:
-                df = st.session_state.processed_df
-                total_input_tokens, total_output_tokens = st.session_state.token_stats
+                df = st.session_state.scraped_df
 
-            st.success("✅ Processing complete!")
+            st.success("✅ Scraping complete!")
+            
+            # Show scraping statistics
+            success_count = len(df[df['Scrape Status'] == 'SUCCESS'])
+            error_count = len(df[df['Scrape Status'].str.contains('ERROR', na=False)])
+            insufficient_content_count = len(df[df['Scrape Status'] == 'INSUFFICIENT_CONTENT'])
+            
+            st.subheader("Scraping Statistics")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("✅ Successful", success_count)
+            with col2:
+                st.metric("⚠️ Insufficient Content", insufficient_content_count)
+            with col3:
+                st.metric("❌ Errors", error_count)
             
             # Display results preview
             st.subheader("Results Preview")
-            results_preview = df[[selected_url_column, 'Vertical Focus OpenAI']].head(10)
-            st.dataframe(results_preview)
+            results_preview = df[[selected_url_column, 'Scrape Status', 'Website Content']].head(10)
+            # Truncate content for display
+            results_preview['Website Content (Preview)'] = results_preview['Website Content'].apply(
+                lambda x: x[:200] + "..." if len(str(x)) > 200 else x
+            )
+            st.dataframe(results_preview[[selected_url_column, 'Scrape Status', 'Website Content (Preview)']])
             
             # Download button
             buffer = io.BytesIO()
@@ -366,7 +396,137 @@ if tool_option == "Vertical Focus Classifier":
             buffer.seek(0)
 
             st.download_button(
-                label="📥 Download Results CSV",
+                label="📥 Download Scraped Results CSV",
+                data=buffer,
+                file_name=f"scraped_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+
+# TOOL 2: VERTICAL FOCUS CLASSIFIER
+elif tool_option == "Vertical Focus Classifier":
+    st.header("🔍 Vertical Focus Classifier")
+    st.markdown("Upload a CSV with website content to classify each company by industry vertical using ChatGPT.")
+    
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="classifier_upload")
+    
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        
+        # Column selection for content
+        column_options = list(df.columns)
+        
+        # Try to find common content column names and suggest them first
+        content_column_suggestions = []
+        for candidate in ["Website Content", "Content", "Scraped Content", "Description", "About"]:
+            if candidate in column_options:
+                content_column_suggestions.append(candidate)
+        
+        # Put suggestions at the beginning, then add remaining columns
+        remaining_columns = [col for col in column_options if col not in content_column_suggestions]
+        ordered_columns = content_column_suggestions + remaining_columns
+        
+        selected_content_column = st.selectbox(
+            "Select the column containing website content:",
+            ordered_columns,
+            index=0,
+            help="Choose the column that contains the website content you want to classify"
+        )
+        
+        # Optional: URL column for fallback
+        url_column_options = ["None"] + column_options
+        url_column_suggestions = []
+        for candidate in ["Account: Website", "URL", "Website", "Domain", "Site", "Link"]:
+            if candidate in column_options:
+                url_column_suggestions.append(candidate)
+        
+        url_ordered_columns = ["None"] + url_column_suggestions + [col for col in column_options if col not in url_column_suggestions]
+        
+        selected_url_column = st.selectbox(
+            "Select URL column (optional - used for fallback when content is insufficient):",
+            url_ordered_columns,
+            index=0,
+            help="Optional: Choose the column with URLs for fallback classification when content is insufficient"
+        )
+        
+        # Show preview of selected columns
+        if selected_content_column:
+            st.subheader("Preview of Selected Content Column")
+            preview_data = df[selected_content_column].head(3).tolist()
+            for i, content in enumerate(preview_data, 1):
+                content_preview = str(content)[:200] + "..." if len(str(content)) > 200 else str(content)
+                st.write(f"{i}. {content_preview}")
+            
+            # Show count of non-empty content
+            non_empty_content = df[selected_content_column].dropna().astype(str)
+            non_empty_content = non_empty_content[non_empty_content.str.strip() != '']
+            st.info(f"Found {len(non_empty_content)} non-empty content entries to classify")
+        
+        # Process button
+        if st.button("🚀 Start Classification", type="primary"):
+            if "classified_df" not in st.session_state:
+                # Add new column if it doesn't exist
+                if 'Vertical Focus OpenAI' not in df.columns:
+                    df['Vertical Focus OpenAI'] = ''
+
+                df['Vertical Focus OpenAI'] = df['Vertical Focus OpenAI'].astype(str)
+
+                # Filter out empty content
+                content_to_process = df[df[selected_content_column].notna() & (df[selected_content_column].astype(str).str.strip() != '')].index.tolist()
+                total_content = len(content_to_process)
+                
+                if total_content == 0:
+                    st.error("No valid content found in the selected column.")
+                    st.stop()
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                start_time = time.time()
+
+                with st.spinner("Classifying content..."):
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        futures = []
+                        
+                        for i in content_to_process:
+                            content = str(df.at[i, selected_content_column]).strip()
+                            url = ""
+                            if selected_url_column != "None" and selected_url_column in df.columns:
+                                url = str(df.at[i, selected_url_column]).strip()
+                            
+                            if content and content != 'nan':
+                                futures.append(executor.submit(classify_content, i, content, url, df, selected_content_column))
+
+                        for count, future in enumerate(as_completed(futures)):
+                            future.result()
+                            elapsed = int(time.time() - start_time)
+                            remaining = int((elapsed / (count + 1)) * (total_content - count - 1)) if count > 0 else 0
+                            status_text.text(f"Classified {count + 1}/{total_content} | ~{remaining}s remaining")
+                            progress_bar.progress((count + 1) / total_content)
+
+                st.session_state.classified_df = df
+                st.session_state.token_stats = (total_input_tokens, total_output_tokens)
+
+            else:
+                df = st.session_state.classified_df
+                total_input_tokens, total_output_tokens = st.session_state.token_stats
+
+            st.success("✅ Classification complete!")
+            
+            # Display results preview
+            st.subheader("Results Preview")
+            results_preview = df[[selected_content_column, 'Vertical Focus OpenAI']].head(10)
+            # Truncate content for display
+            results_preview['Content (Preview)'] = results_preview[selected_content_column].apply(
+                lambda x: str(x)[:100] + "..." if len(str(x)) > 100 else str(x)
+            )
+            st.dataframe(results_preview[['Content (Preview)', 'Vertical Focus OpenAI']])
+            
+            # Download button
+            buffer = io.BytesIO()
+            df.to_csv(buffer, index=False)
+            buffer.seek(0)
+
+            st.download_button(
+                label="📥 Download Classification Results CSV",
                 data=buffer,
                 file_name=f"classified_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
@@ -386,7 +546,7 @@ if tool_option == "Vertical Focus Classifier":
             with col3:
                 st.metric("Estimated Cost", f"${total_cost:.4f}")
 
-# TOOL 2: VERTICAL FOCUS FILTER
+# TOOL 3: VERTICAL FOCUS FILTER
 elif tool_option == "Vertical Focus Filter":
     st.header("🔧 Vertical Focus Filter")
     st.markdown("Upload a CSV with vertical focus data and filter rows that match a specific vertical using ChatGPT classification.")
@@ -398,12 +558,20 @@ elif tool_option == "Vertical Focus Filter":
         
         # Column selection
         column_options = list(df.columns)
-        default_col = "Vertical Focus" if "Vertical Focus" in column_options else column_options[0]
+        
+        # Try to find common vertical column names
+        vertical_column_suggestions = []
+        for candidate in ["Vertical Focus", "Vertical Focus OpenAI", "Industry", "Vertical", "Category"]:
+            if candidate in column_options:
+                vertical_column_suggestions.append(candidate)
+        
+        remaining_columns = [col for col in column_options if col not in vertical_column_suggestions]
+        ordered_columns = vertical_column_suggestions + remaining_columns
         
         selected_column = st.selectbox(
             "Select the column containing vertical focus data:",
-            column_options,
-            index=column_options.index(default_col)
+            ordered_columns,
+            index=0
         )
         
         # Vertical input
@@ -496,7 +664,7 @@ elif tool_option == "Vertical Focus Filter":
             else:
                 st.info("No matching entries found. Try a different vertical or check your data.")
 
-# TOOL 3: COMPANY QUERY TOOL
+# TOOL 4: COMPANY QUERY TOOL
 elif tool_option == "Company Query Tool":
     st.header("💬 Company Query Tool")
     st.markdown("Upload a CSV with website content and ask questions about the companies (e.g., 'Find all SaaS companies', 'Which companies offer consulting services?').")
@@ -508,12 +676,20 @@ elif tool_option == "Company Query Tool":
         
         # Column selection for website content
         column_options = list(df.columns)
-        default_col = "Website Content" if "Website Content" in column_options else column_options[0]
+        
+        # Try to find common content column names
+        content_column_suggestions = []
+        for candidate in ["Website Content", "Content", "Scraped Content", "Description", "About"]:
+            if candidate in column_options:
+                content_column_suggestions.append(candidate)
+        
+        remaining_columns = [col for col in column_options if col not in content_column_suggestions]
+        ordered_columns = content_column_suggestions + remaining_columns
         
         selected_column = st.selectbox(
             "Select the column containing website content:",
-            column_options,
-            index=column_options.index(default_col)
+            ordered_columns,
+            index=0
         )
         
         # Question input
@@ -546,82 +722,4 @@ elif tool_option == "Company Query Tool":
             # Process in batches
             batch_size = 10  # Smaller batch size due to longer content
             content_list = non_empty_df[selected_column].tolist()
-            total_batches = (len(content_list) + batch_size - 1) // batch_size
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            all_matches = []
-            
-            with st.spinner("Analyzing companies using ChatGPT..."):
-                for i in range(0, len(content_list), batch_size):
-                    batch = content_list[i:i + batch_size]
-                    batch_num = i // batch_size + 1
-                    
-                    status_text.text(f"Processing batch {batch_num}/{total_batches}...")
-                    
-                    batch_results = classify_companies_by_query(batch, user_question)
-                    all_matches.extend(batch_results)
-                    
-                    progress_bar.progress(batch_num / total_batches)
-                    time.sleep(0.8)  # Slightly longer rate limiting for content analysis
-            
-            # Filter results
-            non_empty_df['chatgpt_match'] = all_matches
-            matching_rows = non_empty_df[non_empty_df['chatgpt_match'] == True].copy()
-            matching_rows = matching_rows.drop('chatgpt_match', axis=1)
-            
-            st.success(f"✅ Found {len(matching_rows)} companies matching: '{user_question}'")
-            
-            if len(matching_rows) > 0:
-                # Display results preview
-                st.subheader("Matching Companies Preview")
-                preview_columns = [col for col in matching_rows.columns if col != selected_column][:5]  # Show first 5 columns excluding content
-                if preview_columns:
-                    st.dataframe(matching_rows[preview_columns].head(10))
-                else:
-                    st.dataframe(matching_rows.head(10))
-                
-                # Download button
-                buffer = io.BytesIO()
-                matching_rows.to_csv(buffer, index=False)
-                buffer.seek(0)
-                
-                safe_question = user_question.replace(' ', '_').replace('?', '').replace('/', '_')[:30]
-                filename = f"query_results_{safe_question}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                
-                st.download_button(
-                    label="📥 Download Query Results",
-                    data=buffer,
-                    file_name=filename,
-                    mime="text/csv"
-                )
-                
-                # Cost estimation
-                input_cost = (total_input_tokens / 1_000_000) * 0.15
-                output_cost = (total_output_tokens / 1_000_000) * 0.60
-                total_cost = input_cost + output_cost
-                
-                st.markdown("### 📊 Usage Statistics")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Input Tokens", f"{total_input_tokens:,}")
-                with col2:
-                    st.metric("Output Tokens", f"{total_output_tokens:,}")
-                with col3:
-                    st.metric("Estimated Cost", f"${total_cost:.4f}")
-                
-                # Show sample matches with company names if available
-                st.subheader("Sample Matches")
-                company_name_cols = [col for col in matching_rows.columns if 'name' in col.lower() or 'company' in col.lower()]
-                if company_name_cols:
-                    name_col = company_name_cols[0]
-                    for idx, row in matching_rows.head(5).iterrows():
-                        st.write(f"• {row[name_col]}")
-                else:
-                    st.write(f"Found {len(matching_rows)} matching companies. Download the results to see all matches.")
-            else:
-                st.info("No matching companies found. Try rephrasing your question or check your data.")
-
-st.markdown("---")
-st.markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            total_batches
