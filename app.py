@@ -564,6 +564,302 @@ elif tool_option == "Vertical Focus Classifier":
                                 url = str(df.at[i, selected_url_column]).strip()
                             
                             if content and content != 'nan':
+                                futures.append(executor.submit(classify_content, i, content, url, df, selected_content_column, "service"))
+
+                        for count, future in enumerate(as_completed(futures)):
+                            future.result()
+                            elapsed = int(time.time() - start_time)
+                            remaining = int((elapsed / (count + 1)) * (total_content - count - 1)) if count > 0 else 0
+                            status_text.text(f"Classified {count + 1}/{total_content} | ~{remaining}s remaining")
+                            progress_bar.progress((count + 1) / total_content)
+
+                st.session_state.service_classified_df = df
+                st.session_state.service_token_stats = (total_input_tokens, total_output_tokens)
+
+            else:
+                df = st.session_state.service_classified_df
+                total_input_tokens, total_output_tokens = st.session_state.service_token_stats
+
+            st.success("✅ Service Classification complete!")
+            
+            # Display results preview
+            st.subheader("Results Preview")
+            results_preview = df[[selected_content_column, 'Service OpenAI']].head(10)
+            # Truncate content for display
+            results_preview['Content (Preview)'] = results_preview[selected_content_column].apply(
+                lambda x: str(x)[:100] + "..." if len(str(x)) > 100 else str(x)
+            )
+            st.dataframe(results_preview[['Content (Preview)', 'Service OpenAI']])
+            
+            # Download button
+            buffer = io.BytesIO()
+            df.to_csv(buffer, index=False)
+            buffer.seek(0)
+
+            st.download_button(
+                label="📥 Download Service Classification Results CSV",
+                data=buffer,
+                file_name=f"service_classified_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+
+            # Cost estimation
+            input_cost = (total_input_tokens / 1_000_000) * 0.15
+            output_cost = (total_output_tokens / 1_000_000) * 0.60
+            total_cost = input_cost + output_cost
+
+            st.markdown("### 📊 Usage Statistics")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Input Tokens", f"{total_input_tokens:,}")
+            with col2:
+                st.metric("Output Tokens", f"{total_output_tokens:,}")
+            with col3:
+                st.metric("Estimated Cost", f"${total_cost:.4f}")
+
+# TOOL 4: VERTICAL FOCUS FILTER
+elif tool_option == "Vertical Focus Filter":
+    st.header("🔧 Vertical Focus Filter")
+    st.markdown("Upload a CSV with vertical focus data and filter rows that match a specific vertical using ChatGPT classification.")
+    
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="filter_upload")
+    
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        
+        # Column selection
+        column_options = list(df.columns)
+        
+        # Try to find common vertical column names
+        vertical_column_suggestions = []
+        for candidate in ["Vertical Focus", "Vertical Focus OpenAI", "Industry", "Vertical", "Category"]:
+            if candidate in column_options:
+                vertical_column_suggestions.append(candidate)
+        
+        remaining_columns = [col for col in column_options if col not in vertical_column_suggestions]
+        ordered_columns = vertical_column_suggestions + remaining_columns
+        
+        selected_column = st.selectbox(
+            "Select the column containing vertical focus data:",
+            ordered_columns,
+            index=0
+        )
+        
+        # Vertical input
+        search_vertical = st.text_input(
+            "Enter the vertical to search for:",
+            placeholder="e.g., Legal Services, Education, Property Management"
+        )
+        
+        if search_vertical and st.button("🔍 Filter Data", type="primary"):
+            # Clean the data
+            df[selected_column] = df[selected_column].apply(clean_vertical_entry)
+            non_empty_df = df[df[selected_column] != ''].copy()
+            
+            if len(non_empty_df) == 0:
+                st.error("No valid entries found in the selected column.")
+                st.stop()
+            
+            # Reset token counters for this operation
+            total_input_tokens = 0
+            total_output_tokens = 0
+            
+            # Process in batches
+            batch_size = 20
+            entries_list = non_empty_df[selected_column].tolist()
+            total_batches = (len(entries_list) + batch_size - 1) // batch_size
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            all_matches = []
+            
+            with st.spinner("Filtering data using ChatGPT..."):
+                for i in range(0, len(entries_list), batch_size):
+                    batch = entries_list[i:i + batch_size]
+                    batch_num = i // batch_size + 1
+                    
+                    status_text.text(f"Processing batch {batch_num}/{total_batches}...")
+                    
+                    batch_results = classify_batch_for_filtering(batch, search_vertical)
+                    all_matches.extend(batch_results)
+                    
+                    progress_bar.progress(batch_num / total_batches)
+                    time.sleep(0.5)  # Rate limiting
+            
+            # Filter results
+            non_empty_df['chatgpt_match'] = all_matches
+            matching_rows = non_empty_df[non_empty_df['chatgpt_match'] == True].copy()
+            matching_rows = matching_rows.drop('chatgpt_match', axis=1)
+            
+            st.success(f"✅ Found {len(matching_rows)} matching rows for '{search_vertical}'")
+            
+            if len(matching_rows) > 0:
+                # Display results preview
+                st.subheader("Matching Entries Preview")
+                st.dataframe(matching_rows[[selected_column]].head(10))
+                
+                # Download button
+                buffer = io.BytesIO()
+                matching_rows.to_csv(buffer, index=False)
+                buffer.seek(0)
+                
+                safe_vertical = search_vertical.replace(' ', '_').replace('/', '_')
+                filename = f"filtered_{safe_vertical}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                
+                st.download_button(
+                    label="📥 Download Filtered Results",
+                    data=buffer,
+                    file_name=filename,
+                    mime="text/csv"
+                )
+                
+                # Cost estimation
+                input_cost = (total_input_tokens / 1_000_000) * 0.15
+                output_cost = (total_output_tokens / 1_000_000) * 0.60
+                total_cost = input_cost + output_cost
+                
+                st.markdown("### 📊 Usage Statistics")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Input Tokens", f"{total_input_tokens:,}")
+                with col2:
+                    st.metric("Output Tokens", f"{total_output_tokens:,}")
+                with col3:
+                    st.metric("Estimated Cost", f"${total_cost:.4f}")
+                
+                # Show sample matches
+                st.subheader("Sample Matches")
+                for idx, row in matching_rows.head(5).iterrows():
+                    st.write(f"• {row[selected_column]}")
+            else:
+                st.info("No matching entries found. Try a different vertical or check your data.")
+
+# TOOL 5: COMPANY QUERY TOOL
+elif tool_option == "Company Query Tool":
+    st.header("💬 Company Query Tool")
+    st.markdown("Upload a CSV with website content and ask questions about the companies (e.g., 'Find all SaaS companies', 'Which companies offer consulting services?').")
+    
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="query_upload")
+    
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        
+        # Column selection for website content
+        column_options = list(df.columns)
+        
+        # Try to find common content column names
+        content_column_suggestions = []
+        for candidate in ["Website Content", "Content", "Scraped Content", "Description", "About"]:
+            if candidate in column_options:
+                content_column_suggestions.append(candidate)
+        
+        remaining_columns = [col for col in column_options if col not in content_column_suggestions]
+        ordered_columns = content_column_suggestions + remaining_columns
+        
+        selected_column = st.selectbox(
+            "Select the column containing website content:",
+            ordered_columns,
+            index=0
+        )
+        
+        # Question input
+        user_question = st.text_input(
+            "Ask a question about the companies:",
+            placeholder="e.g., Find all SaaS companies, Which companies offer consulting services?, Show me e-commerce businesses"
+        )
+        
+        # Example questions
+        st.markdown("**Example questions:**")
+        st.markdown("- Find all SaaS companies")
+        st.markdown("- Which companies offer consulting services?")
+        st.markdown("- Show me e-commerce businesses")
+        st.markdown("- Find companies that provide software solutions")
+        st.markdown("- Which companies are in the healthcare industry?")
+        
+        if user_question and st.button("🔍 Search Companies", type="primary"):
+            # Clean the data
+            df[selected_column] = df[selected_column].apply(clean_content_entry)
+            non_empty_df = df[df[selected_column] != ''].copy()
+            
+            if len(non_empty_df) == 0:
+                st.error("No valid website content found in the selected column.")
+                st.stop()
+            
+            # Reset token counters for this operation
+            total_input_tokens = 0
+            total_output_tokens = 0
+            
+            # Process in batches
+            batch_size = 10  # Smaller batch size due to longer content
+            content_list = non_empty_df[selected_column].tolist()
+            total_batches = (len(content_list) + batch_size - 1) // batch_size
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            all_matches = []
+            
+            with st.spinner("Analyzing companies using ChatGPT..."):
+                for i in range(0, len(content_list), batch_size):
+                    batch = content_list[i:i + batch_size]
+                    batch_num = i // batch_size + 1
+                    
+                    status_text.text(f"Processing batch {batch_num}/{total_batches}...")
+                    
+                    batch_results = classify_companies_by_query(batch, user_question)
+                    all_matches.extend(batch_results)
+                    
+                    progress_bar.progress(batch_num / total_batches)
+                    time.sleep(0.5)  # Rate limiting
+            
+            # Filter results
+            non_empty_df['chatgpt_match'] = all_matches
+            matching_rows = non_empty_df[non_empty_df['chatgpt_match'] == True].copy()
+            matching_rows = matching_rows.drop('chatgpt_match', axis=1)
+            
+            st.success(f"✅ Found {len(matching_rows)} companies matching: '{user_question}'")
+            
+            if len(matching_rows) > 0:
+                # Display results preview
+                st.subheader("Matching Companies Preview")
+                preview_columns = [col for col in matching_rows.columns if col in ['Company', 'Name', 'Account Name', 'Organization', selected_column]][:3]
+                if not preview_columns:
+                    preview_columns = [selected_column]
+                st.dataframe(matching_rows[preview_columns].head(10))
+                
+                # Download button
+                buffer = io.BytesIO()
+                matching_rows.to_csv(buffer, index=False)
+                buffer.seek(0)
+                
+                safe_question = user_question.replace(' ', '_').replace('?', '').replace('/', '_')[:30]
+                filename = f"query_results_{safe_question}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                
+                st.download_button(
+                    label="📥 Download Query Results",
+                    data=buffer,
+                    file_name=filename,
+                    mime="text/csv"
+                )
+                
+                # Cost estimation
+                input_cost = (total_input_tokens / 1_000_000) * 0.15
+                output_cost = (total_output_tokens / 1_000_000) * 0.60
+                total_cost = input_cost + output_cost
+                
+                st.markdown("### 📊 Usage Statistics")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Input Tokens", f"{total_input_tokens:,}")
+                with col2:
+                    st.metric("Output Tokens", f"{total_output_tokens:,}")
+                with col3:
+                    st.metric("Estimated Cost", f"${total_cost:.4f}")
+            else:
+                st.info("No matching companies found. Try rephrasing your question or check your data.")url_column]).strip()
+                            
+                            if content and content != 'nan':
                                 futures.append(executor.submit(classify_content, i, content, url, df, selected_content_column, "vertical"))
 
                         for count, future in enumerate(as_completed(futures)):
