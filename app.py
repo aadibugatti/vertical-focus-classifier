@@ -264,92 +264,127 @@ st.markdown("---")
 # TOOL 1: VERTICAL FOCUS CLASSIFIER
 if tool_option == "Vertical Focus Classifier":
     st.header("🔍 Vertical Focus Classifier")
-    st.markdown("Upload a CSV with a column called `Account: Website` or `URL` to classify each website by industry vertical.")
+    st.markdown("Upload a CSV with a column containing website URLs to classify each website by industry vertical.")
     
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="classifier_upload")
     
     if uploaded_file:
-        if "processed_df" not in st.session_state:
-            df = pd.read_csv(uploaded_file)
-            
-            # Detect which column to use for URLs
-            url_column = None
-            for candidate in ["Account: Website", "URL"]:
-                if candidate in df.columns:
-                    url_column = candidate
-                    break
-            
-            if not url_column:
-                st.error("CSV must contain a column named either 'Account: Website' or 'URL'.")
-                st.stop()
-            
-            if 'Vertical Focus OpenAI' not in df.columns:
-                df['Vertical Focus OpenAI'] = ''
-            if 'Website Content' not in df.columns:
-                df['Website Content'] = ''
-
-            df['Vertical Focus OpenAI'] = df['Vertical Focus OpenAI'].astype(str)
-            df['Website Content'] = df['Website Content'].astype(str)
-
-            total_urls = len(df)
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            start_time = time.time()
-
-            with st.spinner("Processing websites..."):
-                with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    futures = []
-                    
-                    for i, row in df.iterrows():
-                        url = str(row[url_column]).strip()
-                        if url and url != 'nan':
-                            futures.append(executor.submit(classify_website, i, url, df))
-
-                    for count, future in enumerate(as_completed(futures)):
-                        future.result()
-                        elapsed = int(time.time() - start_time)
-                        remaining = int((elapsed / (count + 1)) * (total_urls - count - 1)) if count > 0 else 0
-                        status_text.text(f"Processed {count + 1}/{total_urls} | ~{remaining}s remaining")
-                        progress_bar.progress((count + 1) / total_urls)
-
-            st.session_state.processed_df = df
-            st.session_state.token_stats = (total_input_tokens, total_output_tokens)
-
-        else:
-            df = st.session_state.processed_df
-            total_input_tokens, total_output_tokens = st.session_state.token_stats
-
-        st.success("✅ Processing complete!")
+        df = pd.read_csv(uploaded_file)
         
-        # Display results preview
-        st.subheader("Results Preview")
-        st.dataframe(df[['Vertical Focus OpenAI']].head(10))
+        # Column selection for URL
+        column_options = list(df.columns)
         
-        # Download button
-        buffer = io.BytesIO()
-        df.to_csv(buffer, index=False)
-        buffer.seek(0)
-
-        st.download_button(
-            label="📥 Download Results CSV",
-            data=buffer,
-            file_name=f"classified_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv"
+        # Try to find common URL column names and suggest them first
+        url_column_suggestions = []
+        for candidate in ["Account: Website", "URL", "Website", "Domain", "Site", "Link"]:
+            if candidate in column_options:
+                url_column_suggestions.append(candidate)
+        
+        # Put suggestions at the beginning, then add remaining columns
+        remaining_columns = [col for col in column_options if col not in url_column_suggestions]
+        ordered_columns = url_column_suggestions + remaining_columns
+        
+        # Default to first suggestion or first column
+        default_col = ordered_columns[0] if ordered_columns else column_options[0]
+        
+        selected_url_column = st.selectbox(
+            "Select the column containing website URLs:",
+            ordered_columns,
+            index=0,
+            help="Choose the column that contains the website URLs you want to classify"
         )
+        
+        # Show preview of selected column
+        if selected_url_column:
+            st.subheader("Preview of Selected Column")
+            preview_data = df[selected_url_column].head(5).tolist()
+            for i, url in enumerate(preview_data, 1):
+                st.write(f"{i}. {url}")
+            
+            # Show count of non-empty URLs
+            non_empty_urls = df[selected_url_column].dropna().astype(str)
+            non_empty_urls = non_empty_urls[non_empty_urls.str.strip() != '']
+            st.info(f"Found {len(non_empty_urls)} non-empty URLs to process")
+        
+        # Process button
+        if st.button("🚀 Start Classification", type="primary"):
+            if "processed_df" not in st.session_state:
+                # Add new columns if they don't exist
+                if 'Vertical Focus OpenAI' not in df.columns:
+                    df['Vertical Focus OpenAI'] = ''
+                if 'Website Content' not in df.columns:
+                    df['Website Content'] = ''
 
-        # Cost estimation
-        input_cost = (total_input_tokens / 1_000_000) * 0.15
-        output_cost = (total_output_tokens / 1_000_000) * 0.60
-        total_cost = input_cost + output_cost
+                df['Vertical Focus OpenAI'] = df['Vertical Focus OpenAI'].astype(str)
+                df['Website Content'] = df['Website Content'].astype(str)
 
-        st.markdown("### 📊 Usage Statistics")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Input Tokens", f"{total_input_tokens:,}")
-        with col2:
-            st.metric("Output Tokens", f"{total_output_tokens:,}")
-        with col3:
-            st.metric("Estimated Cost", f"${total_cost:.4f}")
+                # Filter out empty URLs
+                urls_to_process = df[df[selected_url_column].notna() & (df[selected_url_column].astype(str).str.strip() != '')].index.tolist()
+                total_urls = len(urls_to_process)
+                
+                if total_urls == 0:
+                    st.error("No valid URLs found in the selected column.")
+                    st.stop()
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                start_time = time.time()
+
+                with st.spinner("Processing websites..."):
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        futures = []
+                        
+                        for i in urls_to_process:
+                            url = str(df.at[i, selected_url_column]).strip()
+                            if url and url != 'nan':
+                                futures.append(executor.submit(classify_website, i, url, df))
+
+                        for count, future in enumerate(as_completed(futures)):
+                            future.result()
+                            elapsed = int(time.time() - start_time)
+                            remaining = int((elapsed / (count + 1)) * (total_urls - count - 1)) if count > 0 else 0
+                            status_text.text(f"Processed {count + 1}/{total_urls} | ~{remaining}s remaining")
+                            progress_bar.progress((count + 1) / total_urls)
+
+                st.session_state.processed_df = df
+                st.session_state.token_stats = (total_input_tokens, total_output_tokens)
+
+            else:
+                df = st.session_state.processed_df
+                total_input_tokens, total_output_tokens = st.session_state.token_stats
+
+            st.success("✅ Processing complete!")
+            
+            # Display results preview
+            st.subheader("Results Preview")
+            results_preview = df[[selected_url_column, 'Vertical Focus OpenAI']].head(10)
+            st.dataframe(results_preview)
+            
+            # Download button
+            buffer = io.BytesIO()
+            df.to_csv(buffer, index=False)
+            buffer.seek(0)
+
+            st.download_button(
+                label="📥 Download Results CSV",
+                data=buffer,
+                file_name=f"classified_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+
+            # Cost estimation
+            input_cost = (total_input_tokens / 1_000_000) * 0.15
+            output_cost = (total_output_tokens / 1_000_000) * 0.60
+            total_cost = input_cost + output_cost
+
+            st.markdown("### 📊 Usage Statistics")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Input Tokens", f"{total_input_tokens:,}")
+            with col2:
+                st.metric("Output Tokens", f"{total_output_tokens:,}")
+            with col3:
+                st.metric("Estimated Cost", f"${total_cost:.4f}")
 
 # TOOL 2: VERTICAL FOCUS FILTER
 elif tool_option == "Vertical Focus Filter":
