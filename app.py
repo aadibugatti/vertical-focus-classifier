@@ -84,14 +84,61 @@ def scrape_website(i, url, df, url_column):
     time.sleep(random.uniform(0.5, 1.5))
 
 # CLASSIFICATION FUNCTIONS
-classification_prompt = """Given the following company website content, identify the company's vertical focus in 1–5 words using common industry terms or acronyms (e.g., "HOA", "VAR").
+classification_prompt = """Given the following company website content, identify the company's VERTICAL FOCUS (the specific industry or market they serve) in 1–5 words.
 
-Avoid vague or overly broad categories. Be specific about the industry the company serves.
+VERTICAL FOCUS = The industry/market the company serves (WHO they serve)
+- Examples: Healthcare, Real Estate, Manufacturing, Education, Financial Services, Retail, Hospitality, Legal Services, Construction, Transportation
+
+SERVICE = What the company does (WHAT they provide)
+- Examples: Consulting, Software Development, Marketing, IT Support, Accounting, Legal Services, Design
+
+IMPORTANT: You must identify the VERTICAL FOCUS (industry served), NOT the service provided.
+
+Guidelines:
+- Focus on the TARGET MARKET/INDUSTRY the company serves
+- Be specific about the industry vertical (e.g., "Healthcare IT" not just "IT")
+- Use common industry terms or acronyms when appropriate (e.g., "HOA", "PropTech", "FinTech")
+- Avoid generic terms like "Business Services" or "Technology"
+- If serving multiple verticals, choose the primary one
+
 Examples:
-- "IT Consulting" — too generic
-- "Real Estate IT Consulting" — specific and useful
+- A company providing IT consulting to hospitals → "Healthcare"
+- A software company for restaurants → "Restaurant/Food Service"
+- Marketing agency for law firms → "Legal Services"
+- Property management software → "Real Estate"
+- HOA management services → "HOA"
 
-Return ONLY the vertical focus term (e.g., "Self Storage", "Outdoor Hospitality", "HOA", etc). Ensure the output is less than 50 characters. If the industry is unclear, return exactly: ERROR
+Return ONLY the vertical focus term. Ensure the output is less than 50 characters. If the industry vertical is unclear, return exactly: ERROR
+
+Website content:
+{content}
+"""
+
+service_classification_prompt = """Given the following company website content, identify the company's PRIMARY SERVICE (what they do/provide) in 1–5 words.
+
+SERVICE = What the company does or provides (WHAT they deliver)
+- Examples: Software Development, Consulting, Marketing, IT Support, Web Design, Accounting, Legal Services, Property Management, System Integration
+
+VERTICAL FOCUS = The industry/market they serve (WHO they serve)
+- Examples: Healthcare, Real Estate, Manufacturing, Education, Financial Services
+
+IMPORTANT: You must identify the PRIMARY SERVICE (what they do), NOT the industry they serve.
+
+Guidelines:
+- Focus on the MAIN ACTIVITY or OFFERING the company provides
+- Be specific about the type of service (e.g., "Digital Marketing" not just "Marketing")
+- Use common business service terms
+- Avoid industry names or market segments
+- If providing multiple services, choose the primary one
+
+Examples:
+- A company providing IT consulting to hospitals → "IT Consulting"
+- A software company for restaurants → "Software Development"
+- Marketing agency for law firms → "Digital Marketing"
+- Property management software → "Software Development"
+- HOA management services → "Property Management"
+
+Return ONLY the service term. Ensure the output is less than 50 characters. If the service is unclear, return exactly: ERROR
 
 Website content:
 {content}
@@ -100,6 +147,13 @@ Website content:
 url_fallback_prompt = """The content of the following company website could not be accessed. Based only on the company URL and your best inference, guess the likely vertical focus in 1–5 words.
 
 Return ONLY the vertical focus term (e.g., "Self Storage", "Outdoor Hospitality", "HOA", etc). This is a low-confidence guess.
+
+URL: {url}
+"""
+
+service_url_fallback_prompt = """The content of the following company website could not be accessed. Based only on the company URL and your best inference, guess the likely primary service in 1–5 words.
+
+Return ONLY the service term (e.g., "Consulting", "Software Development", "Marketing", etc). This is a low-confidence guess.
 
 URL: {url}
 """
@@ -128,24 +182,40 @@ def call_openai(prompt, max_tokens=100):
         st.error(f"OpenAI API Error: {e}")
         return "ERROR"
 
-def classify_content(i, content, url, df, content_column):
+def classify_content(i, content, url, df, content_column, classification_type="vertical"):
     with api_semaphore:
         try:
             if content and len(content.split()) >= 30:
                 trimmed = ' '.join(content.split()[:800])
-                prompt = classification_prompt.format(content=trimmed)
-                vertical = call_openai(prompt)
-                if vertical == "ERROR":
-                    vertical = call_openai(url_fallback_prompt.format(url=url)) + " *"
+                if classification_type == "vertical":
+                    prompt = classification_prompt.format(content=trimmed)
+                    result_column = 'Vertical Focus OpenAI'
+                    fallback_prompt = url_fallback_prompt.format(url=url)
+                else:  # service
+                    prompt = service_classification_prompt.format(content=trimmed)
+                    result_column = 'Service OpenAI'
+                    fallback_prompt = service_url_fallback_prompt.format(url=url)
+                
+                result = call_openai(prompt)
+                if result == "ERROR":
+                    result = call_openai(fallback_prompt) + " *"
             else:
-                vertical = call_openai(url_fallback_prompt.format(url=url)) + " *"
+                if classification_type == "vertical":
+                    result_column = 'Vertical Focus OpenAI'
+                    fallback_prompt = url_fallback_prompt.format(url=url)
+                else:  # service
+                    result_column = 'Service OpenAI'
+                    fallback_prompt = service_url_fallback_prompt.format(url=url)
+                
+                result = call_openai(fallback_prompt) + " *"
 
-            result = vertical if vertical and vertical != "ERROR" else "GENERATION ERROR"
+            result = result if result and result != "ERROR" else "GENERATION ERROR"
         except Exception as e:
             result = f"[ERROR] {str(e)}"
+            result_column = 'Vertical Focus OpenAI' if classification_type == "vertical" else 'Service OpenAI'
 
         with df_lock:
-            df.at[i, 'Vertical Focus OpenAI'] = result
+            df.at[i, result_column] = result
 
         time.sleep(random.uniform(0.5, 1.5))
 
@@ -273,7 +343,7 @@ st.subheader("Select a Tool")
 
 tool_option = st.selectbox(
     "Choose which tool you'd like to use:",
-    ["Website Scraper", "Vertical Focus Classifier", "Vertical Focus Filter", "Company Query Tool"]
+    ["Website Scraper", "Vertical Focus Classifier", "Service Classifier", "Vertical Focus Filter", "Company Query Tool"]
 )
 
 st.markdown("---")
@@ -405,7 +475,8 @@ if tool_option == "Website Scraper":
 # TOOL 2: VERTICAL FOCUS CLASSIFIER
 elif tool_option == "Vertical Focus Classifier":
     st.header("🔍 Vertical Focus Classifier")
-    st.markdown("Upload a CSV with website content to classify each company by industry vertical using ChatGPT.")
+    st.markdown("Upload a CSV with website content to classify each company by **industry vertical** (WHO they serve) using ChatGPT.")
+    st.info("**Vertical Focus** = The specific industry or market the company serves (e.g., Healthcare, Real Estate, Manufacturing)")
     
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="classifier_upload")
     
@@ -462,7 +533,7 @@ elif tool_option == "Vertical Focus Classifier":
             st.info(f"Found {len(non_empty_content)} non-empty content entries to classify")
         
         # Process button
-        if st.button("🚀 Start Classification", type="primary"):
+        if st.button("🚀 Start Vertical Classification", type="primary"):
             if "classified_df" not in st.session_state:
                 # Add new column if it doesn't exist
                 if 'Vertical Focus OpenAI' not in df.columns:
@@ -482,7 +553,7 @@ elif tool_option == "Vertical Focus Classifier":
                 status_text = st.empty()
                 start_time = time.time()
 
-                with st.spinner("Classifying content..."):
+                with st.spinner("Classifying vertical focus..."):
                     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                         futures = []
                         
@@ -493,7 +564,7 @@ elif tool_option == "Vertical Focus Classifier":
                                 url = str(df.at[i, selected_url_column]).strip()
                             
                             if content and content != 'nan':
-                                futures.append(executor.submit(classify_content, i, content, url, df, selected_content_column))
+                                futures.append(executor.submit(classify_content, i, content, url, df, selected_content_column, "vertical"))
 
                         for count, future in enumerate(as_completed(futures)):
                             future.result()
@@ -509,7 +580,7 @@ elif tool_option == "Vertical Focus Classifier":
                 df = st.session_state.classified_df
                 total_input_tokens, total_output_tokens = st.session_state.token_stats
 
-            st.success("✅ Classification complete!")
+            st.success("✅ Vertical Focus Classification complete!")
             
             # Display results preview
             st.subheader("Results Preview")
@@ -526,9 +597,9 @@ elif tool_option == "Vertical Focus Classifier":
             buffer.seek(0)
 
             st.download_button(
-                label="📥 Download Classification Results CSV",
+                label="📥 Download Vertical Classification Results CSV",
                 data=buffer,
-                file_name=f"classified_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                file_name=f"vertical_classified_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
             )
 
@@ -546,180 +617,93 @@ elif tool_option == "Vertical Focus Classifier":
             with col3:
                 st.metric("Estimated Cost", f"${total_cost:.4f}")
 
-# TOOL 3: VERTICAL FOCUS FILTER
-elif tool_option == "Vertical Focus Filter":
-    st.header("🔧 Vertical Focus Filter")
-    st.markdown("Upload a CSV with vertical focus data and filter rows that match a specific vertical using ChatGPT classification.")
+# TOOL 3: SERVICE CLASSIFIER
+elif tool_option == "Service Classifier":
+    st.header("🛠️ Service Classifier")
+    st.markdown("Upload a CSV with website content to classify each company by **primary service** (WHAT they do) using ChatGPT.")
+    st.info("**Service** = What the company does or provides (e.g., Software Development, Consulting, Marketing)")
     
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="filter_upload")
-    
-    if uploaded_file:
-        df = pd.read_csv(uploaded_file)
-        
-        # Column selection
-        column_options = list(df.columns)
-        
-        # Try to find common vertical column names
-        vertical_column_suggestions = []
-        for candidate in ["Vertical Focus", "Vertical Focus OpenAI", "Industry", "Vertical", "Category"]:
-            if candidate in column_options:
-                vertical_column_suggestions.append(candidate)
-        
-        remaining_columns = [col for col in column_options if col not in vertical_column_suggestions]
-        ordered_columns = vertical_column_suggestions + remaining_columns
-        
-        selected_column = st.selectbox(
-            "Select the column containing vertical focus data:",
-            ordered_columns,
-            index=0
-        )
-        
-        # Vertical input
-        search_vertical = st.text_input(
-            "Enter the vertical to search for:",
-            placeholder="e.g., Legal Services, Education, Property Management"
-        )
-        
-        if search_vertical and st.button("🔍 Filter Data", type="primary"):
-            # Clean the data
-            df[selected_column] = df[selected_column].apply(clean_vertical_entry)
-            non_empty_df = df[df[selected_column] != ''].copy()
-            
-            if len(non_empty_df) == 0:
-                st.error("No valid entries found in the selected column.")
-                st.stop()
-            
-            # Reset token counters for this operation
-            total_input_tokens = 0
-            total_output_tokens = 0
-            
-            # Process in batches
-            batch_size = 20
-            entries_list = non_empty_df[selected_column].tolist()
-            total_batches = (len(entries_list) + batch_size - 1) // batch_size
-            
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            all_matches = []
-            
-            with st.spinner("Filtering data using ChatGPT..."):
-                for i in range(0, len(entries_list), batch_size):
-                    batch = entries_list[i:i + batch_size]
-                    batch_num = i // batch_size + 1
-                    
-                    status_text.text(f"Processing batch {batch_num}/{total_batches}...")
-                    
-                    batch_results = classify_batch_for_filtering(batch, search_vertical)
-                    all_matches.extend(batch_results)
-                    
-                    progress_bar.progress(batch_num / total_batches)
-                    time.sleep(0.5)  # Rate limiting
-            
-            # Filter results
-            non_empty_df['chatgpt_match'] = all_matches
-            matching_rows = non_empty_df[non_empty_df['chatgpt_match'] == True].copy()
-            matching_rows = matching_rows.drop('chatgpt_match', axis=1)
-            
-            st.success(f"✅ Found {len(matching_rows)} matching rows for '{search_vertical}'")
-            
-            if len(matching_rows) > 0:
-                # Display results preview
-                st.subheader("Matching Entries Preview")
-                st.dataframe(matching_rows[[selected_column]].head(10))
-                
-                # Download button
-                buffer = io.BytesIO()
-                matching_rows.to_csv(buffer, index=False)
-                buffer.seek(0)
-                
-                safe_vertical = search_vertical.replace(' ', '_').replace('/', '_')
-                filename = f"filtered_{safe_vertical}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                
-                st.download_button(
-                    label="📥 Download Filtered Results",
-                    data=buffer,
-                    file_name=filename,
-                    mime="text/csv"
-                )
-                
-                # Cost estimation
-                input_cost = (total_input_tokens / 1_000_000) * 0.15
-                output_cost = (total_output_tokens / 1_000_000) * 0.60
-                total_cost = input_cost + output_cost
-                
-                st.markdown("### 📊 Usage Statistics")
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Input Tokens", f"{total_input_tokens:,}")
-                with col2:
-                    st.metric("Output Tokens", f"{total_output_tokens:,}")
-                with col3:
-                    st.metric("Estimated Cost", f"${total_cost:.4f}")
-                
-                # Show sample matches
-                st.subheader("Sample Matches")
-                for idx, row in matching_rows.head(5).iterrows():
-                    st.write(f"• {row[selected_column]}")
-            else:
-                st.info("No matching entries found. Try a different vertical or check your data.")
-
-# TOOL 4: COMPANY QUERY TOOL
-elif tool_option == "Company Query Tool":
-    st.header("💬 Company Query Tool")
-    st.markdown("Upload a CSV with website content and ask questions about the companies (e.g., 'Find all SaaS companies', 'Which companies offer consulting services?').")
-    
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="query_upload")
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="service_classifier_upload")
     
     if uploaded_file:
         df = pd.read_csv(uploaded_file)
         
-        # Column selection for website content
+        # Column selection for content
         column_options = list(df.columns)
         
-        # Try to find common content column names
+        # Try to find common content column names and suggest them first
         content_column_suggestions = []
         for candidate in ["Website Content", "Content", "Scraped Content", "Description", "About"]:
             if candidate in column_options:
                 content_column_suggestions.append(candidate)
         
+        # Put suggestions at the beginning, then add remaining columns
         remaining_columns = [col for col in column_options if col not in content_column_suggestions]
         ordered_columns = content_column_suggestions + remaining_columns
         
-        selected_column = st.selectbox(
+        selected_content_column = st.selectbox(
             "Select the column containing website content:",
             ordered_columns,
-            index=0
+            index=0,
+            help="Choose the column that contains the website content you want to classify"
         )
         
-        # Question input
-        user_question = st.text_input(
-            "Ask a question about the companies:",
-            placeholder="e.g., Find all SaaS companies, Which companies offer consulting services?, Show me e-commerce businesses"
+        # Optional: URL column for fallback
+        url_column_options = ["None"] + column_options
+        url_column_suggestions = []
+        for candidate in ["Account: Website", "URL", "Website", "Domain", "Site", "Link"]:
+            if candidate in column_options:
+                url_column_suggestions.append(candidate)
+        
+        url_ordered_columns = ["None"] + url_column_suggestions + [col for col in column_options if col not in url_column_suggestions]
+        
+        selected_url_column = st.selectbox(
+            "Select URL column (optional - used for fallback when content is insufficient):",
+            url_ordered_columns,
+            index=0,
+            help="Optional: Choose the column with URLs for fallback classification when content is insufficient"
         )
         
-        # Example questions
-        st.markdown("**Example questions:**")
-        st.markdown("- Find all SaaS companies")
-        st.markdown("- Which companies offer consulting services?")
-        st.markdown("- Show me e-commerce businesses")
-        st.markdown("- Find companies that provide software solutions")
-        st.markdown("- Which companies are in the healthcare industry?")
+        # Show preview of selected columns
+        if selected_content_column:
+            st.subheader("Preview of Selected Content Column")
+            preview_data = df[selected_content_column].head(3).tolist()
+            for i, content in enumerate(preview_data, 1):
+                content_preview = str(content)[:200] + "..." if len(str(content)) > 200 else str(content)
+                st.write(f"{i}. {content_preview}")
+            
+            # Show count of non-empty content
+            non_empty_content = df[selected_content_column].dropna().astype(str)
+            non_empty_content = non_empty_content[non_empty_content.str.strip() != '']
+            st.info(f"Found {len(non_empty_content)} non-empty content entries to classify")
         
-        if user_question and st.button("🔍 Search Companies", type="primary"):
-            # Clean the data
-            df[selected_column] = df[selected_column].apply(clean_content_entry)
-            non_empty_df = df[df[selected_column] != ''].copy()
-            
-            if len(non_empty_df) == 0:
-                st.error("No valid website content found in the selected column.")
-                st.stop()
-            
-            # Reset token counters for this operation
-            total_input_tokens = 0
-            total_output_tokens = 0
-            
-            # Process in batches
-            batch_size = 10  # Smaller batch size due to longer content
-            content_list = non_empty_df[selected_column].tolist()
-            total_batches
+        # Process button
+        if st.button("🚀 Start Service Classification", type="primary"):
+            if "service_classified_df" not in st.session_state:
+                # Add new column if it doesn't exist
+                if 'Service OpenAI' not in df.columns:
+                    df['Service OpenAI'] = ''
+
+                df['Service OpenAI'] = df['Service OpenAI'].astype(str)
+
+                # Filter out empty content
+                content_to_process = df[df[selected_content_column].notna() & (df[selected_content_column].astype(str).str.strip() != '')].index.tolist()
+                total_content = len(content_to_process)
+                
+                if total_content == 0:
+                    st.error("No valid content found in the selected column.")
+                    st.stop()
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                start_time = time.time()
+
+                with st.spinner("Classifying services..."):
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        futures = []
+                        
+                        for i in content_to_process:
+                            content = str(df.at[i, selected_content_column]).strip()
+                            url = ""
+                            if selected_url_column != "None" and selected_url_column in df.columns:
+                                url = str(df.at[i, selected_
