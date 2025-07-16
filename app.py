@@ -873,7 +873,7 @@ elif tool_option == "Vertical Focus Filter":
             else:
                 st.info("No matching entries found. Try a different vertical or check your data.")
 
-# TOOL 5: COMPANY QUERY TOOL
+# TOOL 3: COMPANY QUERY TOOL
 elif tool_option == "Company Query Tool":
     st.header("💬 Company Query Tool")
     st.markdown("Upload a CSV with website content and ask questions about the companies (e.g., 'Find all SaaS companies', 'Which companies offer consulting services?').")
@@ -885,20 +885,12 @@ elif tool_option == "Company Query Tool":
         
         # Column selection for website content
         column_options = list(df.columns)
-        
-        # Try to find common content column names
-        content_column_suggestions = []
-        for candidate in ["Website Content", "Content", "Scraped Content", "Description", "About"]:
-            if candidate in column_options:
-                content_column_suggestions.append(candidate)
-        
-        remaining_columns = [col for col in column_options if col not in content_column_suggestions]
-        ordered_columns = content_column_suggestions + remaining_columns
+        default_col = "Website Content" if "Website Content" in column_options else column_options[0]
         
         selected_column = st.selectbox(
             "Select the column containing website content:",
-            ordered_columns,
-            index=0
+            column_options,
+            index=column_options.index(default_col)
         )
         
         # Question input
