@@ -1000,7 +1000,7 @@ elif tool_option == "Company Query Tool":
             else:
                 st.info("No matching companies found. Try rephrasing your question or check your data.")
 # TOOL 6: HOUSATONIC FIT TOOL (Test)
-if tool_option == "Housatonic Fit Tool"
+if tool_option == "Housatonic Fit Tool":
     st.header("Housatonic Fit Tool")
     st.markdown("Upload a CSV with website content to classify if the corresponding website fits Housatonic ideal investment traits.")
     
