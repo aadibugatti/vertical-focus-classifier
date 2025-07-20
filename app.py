@@ -339,7 +339,7 @@ st.subheader("Select a Tool")
 
 tool_option = st.selectbox(
     "Choose which tool you'd like to use:",
-    ["Website Scraper", "Vertical Focus Classifier", "Service Classifier", "Vertical Focus Filter", "Company Query Tool"]
+    ["Website Scraper", "Vertical Focus Classifier", "Service Classifier", "Vertical Focus Filter", "Company Query Tool", "Housatonic Fit Tool"]
 )
 
 st.markdown("---")
@@ -873,7 +873,7 @@ elif tool_option == "Vertical Focus Filter":
             else:
                 st.info("No matching entries found. Try a different vertical or check your data.")
 
-# TOOL 3: COMPANY QUERY TOOL
+# TOOL 5: COMPANY QUERY TOOL
 elif tool_option == "Company Query Tool":
     st.header("💬 Company Query Tool")
     st.markdown("Upload a CSV with website content and ask questions about the companies (e.g., 'Find all SaaS companies', 'Which companies offer consulting services?').")
@@ -999,6 +999,11 @@ elif tool_option == "Company Query Tool":
                     st.write(f"Found {len(matching_rows)} matching companies. Download the results to see all matches.")
             else:
                 st.info("No matching companies found. Try rephrasing your question or check your data.")
+# TOOL 6: HOUSATONIC FIT TOOL (Test)
+if tool_option == "Housatonic Fit Tool"
+    st.header("Housatonic Fit Tool")
+    st.markdown("Upload a CSV with website content to classify if the corresponding website fits Housatonic ideal investment traits.")
+    
 
 st.markdown("---")
 st.markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
