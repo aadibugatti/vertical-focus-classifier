@@ -1002,8 +1002,100 @@ elif tool_option == "Company Query Tool":
 # TOOL 6: HOUSATONIC FIT TOOL (Test)
 if tool_option == "Housatonic Fit Tool":
     st.header("Housatonic Fit Tool")
-    st.markdown("Upload a CSV with website content to classify if the corresponding website fits Housatonic ideal investment traits.")
+    st.markdown("Upload a CSV with website content to classify if the company fits Housatonic ideal investment traits.")
+    uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="classifier_upload")
     
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+        
+        # Column selection for content
+        column_options = list(df.columns)
+        
+        # Try to find common content column names and suggest them first
+        content_column_suggestions = []
+        for candidate in ["Website Content", "Content", "Scraped Content", "Description", "About"]:
+            if candidate in column_options:
+                content_column_suggestions.append(candidate)
+        
+        # Put suggestions at the beginning, then add remaining columns
+        remaining_columns = [col for col in column_options if col not in content_column_suggestions]
+        ordered_columns = content_column_suggestions + remaining_columns
+        
+        selected_content_column = st.selectbox(
+            "Select the column containing website content:",
+            ordered_columns,
+            index=0,
+            help="Choose the column that contains the website content you want to classify"
+        )
+        
+        
+        # Show preview of selected columns
+        if selected_content_column:
+            st.subheader("Preview of Selected Content Column")
+            preview_data = df[selected_content_column].head(3).tolist()
+            for i, content in enumerate(preview_data, 1):
+                content_preview = str(content)[:200] + "..." if len(str(content)) > 200 else str(content)
+                st.write(f"{i}. {content_preview}")
+            
+            # Show count of non-empty content
+            non_empty_content = df[selected_content_column].dropna().astype(str)
+            non_empty_content = non_empty_content[non_empty_content.str.strip() != '']
+            st.info(f"Found {len(non_empty_content)} non-empty content entries to classify")
+        
+        # Process button
+        if st.button("🚀 Start Classification", type="primary"):
+            if "classified_df" not in st.session_state:
+                # Add new column if it doesn't exist
+                housatonic_fit = "Housatonic_Fit" 
+                if housatonic_fit not in df.columns:
+                    df[housatonic_fit] = '0'
+
+                df[housatonic_fit] = df[housatonic_fit].astype(str)
+
+                # Filter out empty content
+                content_to_process = df[df[selected_content_column].notna() & (df[selected_content_column].astype(str).str.strip() != '')].index.tolist()
+                total_content = len(content_to_process)
+                
+                if total_content == 0:
+                    st.error("No valid content found in the selected column.")
+                    st.stop()
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                start_time = time.time()
+
+                with st.spinner("Classifying content..."):
+                    for i in range(5):
+                        x  = 1+1 # placeholder
+
+                st.session_state.classified_df = df
+                
+
+            else:
+                df = st.session_state.classified_df
+
+            st.success("✅ Classification complete!")
+            
+            # Display results preview
+            st.subheader("Results Preview")
+            results_preview = df[[selected_content_column,  housatonic_fit]].head(10)
+            # Truncate content for display
+            results_preview['Content (Preview)'] = results_preview[selected_content_column].apply(
+                lambda x: str(x)[:100] + "..." if len(str(x)) > 100 else str(x)
+            )
+            st.dataframe(results_preview[['Content (Preview)', housatonic_fit]])
+            
+            # Download button
+            buffer = io.BytesIO()
+            df.to_csv(buffer, index=False)
+            buffer.seek(0)
+
+            st.download_button(
+                label="📥 Download Classification Results CSV",
+                data=buffer,
+                file_name=f"classified_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
 
 st.markdown("---")
 st.markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
