@@ -1002,7 +1002,7 @@ elif tool_option == "Company Query Tool":
 # TOOL 6: HOUSATONIC FIT TOOL (Test)
 if tool_option == "Housatonic Fit Tool":
     st.header("Housatonic Fit Tool")
-    st.markdown("Upload a CSV with website content to classify if the company fits Housatonic ideal investment traits.")
+    st.markdown("Upload a CSV with website content to classify if the company would fit Housatonic's list-builder test (ex: company that sells accounting software to law firms only).")
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="classifier_upload")
     
     if uploaded_file:
