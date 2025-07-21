@@ -27,9 +27,7 @@ PASSWORD = st.secrets["APP_PASSWORD"]
 
 model_path = 'fit_text_ai'  
 tokenizer = AutoTokenizer.from_pretrained(model_path)
-model = AutoModelForSequenceClassification.from_pretrained(model_path)
-device = torch.device("cpu")
-model.to(device)
+model = AutoModelForSequenceClassification.from_pretrained(model_path).to("cpu")
 model.eval()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -93,7 +91,7 @@ def scrape_website(i, url, df, url_column):
     time.sleep(random.uniform(0.5, 1.5))
 def fit_ai_predict(text):
     inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
-    inputs = {k: v.to(device) for k, v in inputs.items()} 
+    inputs = {k: v.to("cpu") for k, v in inputs.items()} 
     with torch.no_grad():
             outputs = model(**inputs)
 
