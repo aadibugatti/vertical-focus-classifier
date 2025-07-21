@@ -28,7 +28,7 @@ PASSWORD = st.secrets["APP_PASSWORD"]
 model_path = 'fit_text_ai'  
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForSequenceClassification.from_pretrained(model_path)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cpu")
 model.to(device)
 model.eval()
 
