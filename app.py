@@ -91,7 +91,7 @@ def scrape_website(i, url, df, url_column):
     time.sleep(random.uniform(0.5, 1.5))
 def fit_ai_predict(text):
     inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
-    inputs = {k: v.to("cpu") for k, v in inputs.items()} 
+    inputs = {k: v.to(model.device) for k, v in inputs.items()} 
     with torch.no_grad():
             outputs = model(**inputs)
 
