@@ -27,7 +27,7 @@ PASSWORD = st.secrets["APP_PASSWORD"]
 
 model_path = 'fit_text_ai'  
 tokenizer = AutoTokenizer.from_pretrained(model_path)
-model = AutoModelForSequenceClassification.from_pretrained(model_path).to("cpu")
+model = AutoModelForSequenceClassification.from_pretrained(model_path)
 model.eval()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
