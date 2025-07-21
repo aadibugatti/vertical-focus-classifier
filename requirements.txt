@@ -6,3 +6,4 @@ openai
 pillow
 torch
 transformers
+safetensors
