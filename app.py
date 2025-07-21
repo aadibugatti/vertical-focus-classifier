@@ -4,6 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from openai import OpenAI
+from transformers import  AutoTokenizer, AutoModelForSequenceClassification
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import threading
