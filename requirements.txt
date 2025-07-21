@@ -4,3 +4,5 @@ requests
 beautifulsoup4
 openai
 pillow
+torch
+transformers

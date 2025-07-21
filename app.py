@@ -12,6 +12,7 @@ import random
 import io
 from PIL import Image
 import json
+import torch
 
 # Load logo
 logo = Image.open("images/Housatonic_Partners_Logo.jpg")
@@ -22,6 +23,11 @@ OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 OPENAI_MODEL = "gpt-4o-mini"  # Cost-effective model, change to "gpt-4o" if needed
 MAX_WORKERS = 5
 PASSWORD = st.secrets["APP_PASSWORD"]
+
+model_path = 'fit_text_ai'  
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+model = AutoModelForSequenceClassification.from_pretrained(model_path)
+model.eval()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
@@ -82,7 +88,14 @@ def scrape_website(i, url, df, url_column):
         df.at[i, 'Scrape Status'] = status
 
     time.sleep(random.uniform(0.5, 1.5))
+def fit_ai_predict(text):
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
+    with torch.no_grad():
+            outputs = model(**inputs)
 
+    logits = outputs.logits
+    predicted_class_id = torch.argmax(logits, dim=1).item()
+    return predicted_class_id
 # CLASSIFICATION FUNCTIONS
 classification_prompt = """Given the following company website content, identify the company's VERTICAL FOCUS (the specific industry or market they serve) in 1–5 words.
 
@@ -332,6 +345,7 @@ if not st.session_state.authenticated:
         st.rerun()
     else:
         st.stop()
+
 
 # Tool selection
 st.markdown("---")
@@ -1063,11 +1077,14 @@ if tool_option == "Housatonic Fit Tool":
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 start_time = time.time()
-
+                
                 with st.spinner("Classifying content..."):
-                    for i in range(5):
-                        x  = 1+1 # placeholder
-
+                        for i in range(0,len(content_to_process),1):
+                                df.at[content_to_process[i], housatonic_fit] = fit_ai_predict(df.at[content_to_process[i], selected_content_column])
+                                status_text.text(f"Processing number {i}/{total_content}...")
+                                progress_bar.progress( i / total_content)
+                            
+        
                 st.session_state.classified_df = df
                 
 
