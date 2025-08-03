@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from openai import OpenAI
-from transformers import  AutoTokenizer, AutoModelForSequenceClassification
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import threading
@@ -13,7 +13,7 @@ import random
 import io
 from PIL import Image
 import json
-import torch
+
 
 # Load logo
 logo = Image.open("images/Housatonic_Partners_Logo.jpg")
@@ -24,14 +24,14 @@ OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 OPENAI_MODEL = "gpt-4o-mini"  # Cost-effective model, change to "gpt-4o" if needed
 MAX_WORKERS = 5
 PASSWORD = st.secrets["APP_PASSWORD"]
-
+ """
 device = torch.device("cpu")
 model_path = 'fit_text_ai'  
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForSequenceClassification.from_pretrained(model_path)
 model.to(device)
 model.eval()
-
+"""
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # THREAD-SAFE GLOBALS
@@ -170,6 +170,22 @@ service_url_fallback_prompt = """The content of the following company website co
 Return ONLY the service term (e.g., "Consulting", "Software Development", "Marketing", etc). This is a low-confidence guess.
 
 URL: {url}
+"""
+fit_prompt = """Given the following company website content, identify if the company is an HP FIT. 
+Definition of HP FIT:
+A company is considered an HP FIT if it meets both of the following criteria:
+1.	Software Focus: It provides software (not services or physical goods) specifically for accounting, bookkeeping, or related ERP (Enterprise Resource Planning) functionality.
+2.	Industry Specialization: The software is designed and marketed for a single specific industry. 
+IMPORTANT: A company is not an HP FIT if it provides accounting or ERP software to multiple industries or as a general product. A company is not an HP fit if it does not provide software or IT infrastructure. 
+Examples:
+- A company providing accounting tools for law firms -> TRUE
+- A software company for restaurants ->  TRUE
+- Construction company -> FALSE
+- Company that sells asset management software to utilities, hospitals, and hotels -> FALSE
+
+If a company is an HP FIT, return exactly TRUE. If a company is not an HP FIT, or it is unclear, return exactly FALSE. 
+Website content:
+{content}
 """
 def estimate_tokens(text):
     return len(text) // 4
@@ -1017,10 +1033,11 @@ elif tool_option == "Company Query Tool":
                     st.write(f"Found {len(matching_rows)} matching companies. Download the results to see all matches.")
             else:
                 st.info("No matching companies found. Try rephrasing your question or check your data.")
-# TOOL 6: HOUSATONIC FIT TOOL (Test)
-if tool_option == "Housatonic Fit Tool":
-    st.header("Housatonic Fit Tool")
-    st.markdown("Upload a CSV with website content to classify if the company would pass Housatonic's list-builder test (ex: company that sells accounting software to law firms only).")
+# TOOL 2: VERTICAL FOCUS CLASSIFIER
+elif tool_option == "Vertical Focus Classifier":
+    st.header("🔍 Vertical Focus Classifier")
+    st.markdown("Upload a CSV with website content to classify each company by industry vertical using ChatGPT.")
+    
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="classifier_upload")
     
     if uploaded_file:
@@ -1046,6 +1063,21 @@ if tool_option == "Housatonic Fit Tool":
             help="Choose the column that contains the website content you want to classify"
         )
         
+        # Optional: URL column for fallback
+        url_column_options = ["None"] + column_options
+        url_column_suggestions = []
+        for candidate in ["Account: Website", "URL", "Website", "Domain", "Site", "Link"]:
+            if candidate in column_options:
+                url_column_suggestions.append(candidate)
+        
+        url_ordered_columns = ["None"] + url_column_suggestions + [col for col in column_options if col not in url_column_suggestions]
+        
+        selected_url_column = st.selectbox(
+            "Select URL column (optional - used for fallback when content is insufficient):",
+            url_ordered_columns,
+            index=0,
+            help="Optional: Choose the column with URLs for fallback classification when content is insufficient"
+        )
         
         # Show preview of selected columns
         if selected_content_column:
@@ -1064,11 +1096,10 @@ if tool_option == "Housatonic Fit Tool":
         if st.button("🚀 Start Classification", type="primary"):
             if "classified_df" not in st.session_state:
                 # Add new column if it doesn't exist
-                housatonic_fit = "Housatonic_Fit" 
-                if housatonic_fit not in df.columns:
-                    df[housatonic_fit] = '0'
+                if 'Vertical Focus OpenAI' not in df.columns:
+                    df['Vertical Focus OpenAI'] = ''
 
-                df[housatonic_fit] = df[housatonic_fit].astype(str)
+                df['Vertical Focus OpenAI'] = df['Vertical Focus OpenAI'].astype(str)
 
                 # Filter out empty content
                 content_to_process = df[df[selected_content_column].notna() & (df[selected_content_column].astype(str).str.strip() != '')].index.tolist()
@@ -1081,30 +1112,44 @@ if tool_option == "Housatonic Fit Tool":
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 start_time = time.time()
-                
+
                 with st.spinner("Classifying content..."):
-                        for i in range(0,len(content_to_process),1):
-                                df.at[content_to_process[i], housatonic_fit] = fit_ai_predict(df.at[content_to_process[i], selected_content_column])
-                                status_text.text(f"Processing number {i}/{total_content}...")
-                                progress_bar.progress( i / total_content)
+                    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                        futures = []
+                        
+                        for i in content_to_process:
+                            content = str(df.at[i, selected_content_column]).strip()
+                            url = ""
+                            if selected_url_column != "None" and selected_url_column in df.columns:
+                                url = str(df.at[i, selected_url_column]).strip()
                             
-        
+                            if content and content != 'nan':
+                                futures.append(executor.submit(classify_content, i, content, url, df, selected_content_column))
+
+                        for count, future in enumerate(as_completed(futures)):
+                            future.result()
+                            elapsed = int(time.time() - start_time)
+                            remaining = int((elapsed / (count + 1)) * (total_content - count - 1)) if count > 0 else 0
+                            status_text.text(f"Classified {count + 1}/{total_content} | ~{remaining}s remaining")
+                            progress_bar.progress((count + 1) / total_content)
+
                 st.session_state.classified_df = df
-                
+                st.session_state.token_stats = (total_input_tokens, total_output_tokens)
 
             else:
                 df = st.session_state.classified_df
+                total_input_tokens, total_output_tokens = st.session_state.token_stats
 
             st.success("✅ Classification complete!")
             
             # Display results preview
             st.subheader("Results Preview")
-            results_preview = df[[selected_content_column,  housatonic_fit]].head(10)
+            results_preview = df[[selected_content_column, 'Vertical Focus OpenAI']].head(10)
             # Truncate content for display
             results_preview['Content (Preview)'] = results_preview[selected_content_column].apply(
                 lambda x: str(x)[:100] + "..." if len(str(x)) > 100 else str(x)
             )
-            st.dataframe(results_preview[['Content (Preview)', housatonic_fit]])
+            st.dataframe(results_preview[['Content (Preview)', 'Vertical Focus OpenAI']])
             
             # Download button
             buffer = io.BytesIO()
@@ -1117,6 +1162,20 @@ if tool_option == "Housatonic Fit Tool":
                 file_name=f"classified_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
             )
+
+            # Cost estimation
+            input_cost = (total_input_tokens / 1_000_000) * 0.15
+            output_cost = (total_output_tokens / 1_000_000) * 0.60
+            total_cost = input_cost + output_cost
+
+            st.markdown("### 📊 Usage Statistics")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Input Tokens", f"{total_input_tokens:,}")
+            with col2:
+                st.metric("Output Tokens", f"{total_output_tokens:,}")
+            with col3:
+                st.metric("Estimated Cost", f"${total_cost:.4f}")
 
 st.markdown("---")
 st.markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
