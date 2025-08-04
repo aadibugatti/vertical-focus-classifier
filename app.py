@@ -1153,7 +1153,7 @@ elif tool_option == "Housatonic Fit Tool":
             
             # Display results preview
             st.subheader("Results Preview")
-            results_preview = df[[selected_content_column, 'Vertical Focus OpenAI']].head(10)
+            results_preview = df[[selected_content_column, 'Housatonic Fit OpenAI']].head(10)
             # Truncate content for display
             results_preview['Content (Preview)'] = results_preview[selected_content_column].apply(
                 lambda x: str(x)[:100] + "..." if len(str(x)) > 100 else str(x)
