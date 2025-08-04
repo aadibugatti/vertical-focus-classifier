@@ -13,7 +13,6 @@ import random
 import io
 from PIL import Image
 import json
-        pdesdfsds(x)
 
 # Load logo
 logo = Image.open("images/Housatonic_Partners_Logo.jpg")
