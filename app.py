@@ -24,14 +24,6 @@ OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 OPENAI_MODEL = "gpt-4o-mini"  # Cost-effective model, change to "gpt-4o" if needed
 MAX_WORKERS = 5
 PASSWORD = st.secrets["APP_PASSWORD"]
-TMP_model_comment = """
-device = torch.device("cpu")
-model_path = 'fit_text_ai'  
-tokenizer = AutoTokenizer.from_pretrained(model_path)
-model = AutoModelForSequenceClassification.from_pretrained(model_path)
-model.to(device)
-model.eval()
-"""
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # THREAD-SAFE GLOBALS
