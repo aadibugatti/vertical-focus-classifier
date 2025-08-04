@@ -24,7 +24,7 @@ OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 OPENAI_MODEL = "gpt-4o-mini"  # Cost-effective model, change to "gpt-4o" if needed
 MAX_WORKERS = 5
 PASSWORD = st.secrets["APP_PASSWORD"]
- """
+TMP_model_comment = """
 device = torch.device("cpu")
 model_path = 'fit_text_ai'  
 tokenizer = AutoTokenizer.from_pretrained(model_path)
@@ -176,16 +176,22 @@ Definition of HP FIT:
 A company is considered an HP FIT if it meets both of the following criteria:
 1.	Software Focus: It provides software (not services or physical goods) specifically for accounting, bookkeeping, or related ERP (Enterprise Resource Planning) functionality.
 2.	Industry Specialization: The software is designed and marketed for a single specific industry. 
-IMPORTANT: A company is not an HP FIT if it provides accounting or ERP software to multiple industries or as a general product. A company is not an HP fit if it does not provide software or IT infrastructure. 
+IMPORTANT: A company is not an HP FIT if it provides ERP software to multiple industries or as a general product. A company is not an HP fit if it does not provide software or IT infrastructure. 
 Examples:
 - A company providing accounting tools for law firms -> TRUE
-- A software company for restaurants ->  TRUE
+- A food purchasing and tracking software company for restaurants ->  TRUE
 - Construction company -> FALSE
 - Company that sells asset management software to utilities, hospitals, and hotels -> FALSE
 
 If a company is an HP FIT, return exactly TRUE. If a company is not an HP FIT, or it is unclear, return exactly FALSE. 
 Website content:
 {content}
+"""
+fit_fallback_prompt = """The content of the following company website could not be accessed. Based only on the company URL and your best inference, guess if the company would be of interest to a private equity firm that specalizes in companies that sell enterprise software designed for a single, specific industry.
+
+Return exactly either TRUE or FALSE. This is a low-confidence guess.
+
+URL: {url}
 """
 def estimate_tokens(text):
     return len(text) // 4
@@ -220,6 +226,10 @@ def classify_content(i, content, url, df, content_column, classification_type="v
                     prompt = classification_prompt.format(content=trimmed)
                     result_column = 'Vertical Focus OpenAI'
                     fallback_prompt = url_fallback_prompt.format(url=url)
+                elif classification_type == "fit":
+                    prompt = fit_prompt.format(content = trimmed)
+                    result_column = "Housatonic Fit OpenAI"
+                    fallback_prompt = fit_fallback_prompt.format(url = url)
                 else:  # service
                     prompt = service_classification_prompt.format(content=trimmed)
                     result_column = 'Service OpenAI'
@@ -232,6 +242,9 @@ def classify_content(i, content, url, df, content_column, classification_type="v
                 if classification_type == "vertical":
                     result_column = 'Vertical Focus OpenAI'
                     fallback_prompt = url_fallback_prompt.format(url=url)
+                elif classification_type == "fit":
+                    result_column = 'Housatonic Fit OpenAI'
+                    fallback_prompt = fit_fallback_prompt.format(url = url)
                 else:  # service
                     result_column = 'Service OpenAI'
                     fallback_prompt = service_url_fallback_prompt.format(url=url)
@@ -241,7 +254,12 @@ def classify_content(i, content, url, df, content_column, classification_type="v
             result = result if result and result != "ERROR" else "GENERATION ERROR"
         except Exception as e:
             result = f"[ERROR] {str(e)}"
-            result_column = 'Vertical Focus OpenAI' if classification_type == "vertical" else 'Service OpenAI'
+
+            result_column = 'Service OpenAI' 
+            if classification_type == "vertical":
+                result_column = 'Vertical Focus OpenAI'
+            if classification_type == "fit":
+                result_column = 'Housatonic Fit OpenAI'
 
         with df_lock:
             df.at[i, result_column] = result
@@ -1033,10 +1051,10 @@ elif tool_option == "Company Query Tool":
                     st.write(f"Found {len(matching_rows)} matching companies. Download the results to see all matches.")
             else:
                 st.info("No matching companies found. Try rephrasing your question or check your data.")
-# TOOL 2: VERTICAL FOCUS CLASSIFIER
-elif tool_option == "Vertical Focus Classifier":
-    st.header("🔍 Vertical Focus Classifier")
-    st.markdown("Upload a CSV with website content to classify each company by industry vertical using ChatGPT.")
+# TOOL 6: HOUSATONIC FIT CLASSIFIER
+elif tool_option == "Housatonic Fit Tool":
+    st.header("🔍 Housatonic Fit Tool")
+    st.markdown("Upload a CSV with website content to classify each company by if it meets Housatonic's list builder criteria.")
     
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"], key="classifier_upload")
     
@@ -1096,10 +1114,10 @@ elif tool_option == "Vertical Focus Classifier":
         if st.button("🚀 Start Classification", type="primary"):
             if "classified_df" not in st.session_state:
                 # Add new column if it doesn't exist
-                if 'Vertical Focus OpenAI' not in df.columns:
-                    df['Vertical Focus OpenAI'] = ''
+                if 'Housatonic Fit OpenAI' not in df.columns:
+                    df['Housatonic Fit OpenAI'] = ''
 
-                df['Vertical Focus OpenAI'] = df['Vertical Focus OpenAI'].astype(str)
+                df['Housatonic Fit OpenAI'] = df['Housatonic Fit OpenAI'].astype(str)
 
                 # Filter out empty content
                 content_to_process = df[df[selected_content_column].notna() & (df[selected_content_column].astype(str).str.strip() != '')].index.tolist()
@@ -1124,7 +1142,7 @@ elif tool_option == "Vertical Focus Classifier":
                                 url = str(df.at[i, selected_url_column]).strip()
                             
                             if content and content != 'nan':
-                                futures.append(executor.submit(classify_content, i, content, url, df, selected_content_column))
+                                futures.append(executor.submit(classify_content, i, content, url, df, selected_content_column, classification_type = "fit"))
 
                         for count, future in enumerate(as_completed(futures)):
                             future.result()
