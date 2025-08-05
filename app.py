@@ -1074,7 +1074,7 @@ elif tool_option == "Housatonic Fit Tool":
             results_preview['Content (Preview)'] = results_preview[selected_content_column].apply(
                 lambda x: str(x)[:100] + "..." if len(str(x)) > 100 else str(x)
             )
-            st.dataframe(results_preview[['Content (Preview)', 'Vertical Focus OpenAI']])
+            st.dataframe(results_preview[['Content (Preview)', 'Housatonic Fit OpenAI']])
             
             # Download button
             buffer = io.BytesIO()
