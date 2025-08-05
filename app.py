@@ -4,7 +4,7 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from openai import OpenAI
-
+import yaml
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import threading
@@ -92,98 +92,14 @@ def fit_ai_predict(text):
     predicted_class_id = torch.argmax(logits, dim=1).item()
     return predicted_class_id
 # CLASSIFICATION FUNCTIONS
-classification_prompt = """Given the following company website content, identify the company's VERTICAL FOCUS (the specific industry or market they serve) in 1–5 words.
-
-VERTICAL FOCUS = The industry/market the company serves (WHO they serve)
-- Examples: Healthcare, Real Estate, Manufacturing, Education, Financial Services, Retail, Hospitality, Legal Services, Construction, Transportation
-
-SERVICE = What the company does (WHAT they provide)
-- Examples: Consulting, Software Development, Marketing, IT Support, Accounting, Legal Services, Design
-
-IMPORTANT: You must identify the VERTICAL FOCUS (industry served), NOT the service provided.
-
-Guidelines:
-- Focus on the TARGET MARKET/INDUSTRY the company serves
-- Be specific about the industry vertical (e.g., "Healthcare IT" not just "IT")
-- Use common industry terms or acronyms when appropriate (e.g., "HOA", "PropTech", "FinTech")
-- Avoid generic terms like "Business Services" or "Technology"
-- If serving multiple verticals, choose the primary one
-
-Examples:
-- A company providing IT consulting to hospitals → "Healthcare"
-- A software company for restaurants → "Restaurant/Food Service"
-- Marketing agency for law firms → "Legal Services"
-- Property management software → "Real Estate"
-- HOA management services → "HOA"
-
-Return ONLY the vertical focus term. Ensure the output is less than 50 characters. If the industry vertical is unclear, return exactly: ERROR
-
-Website content:
-{content}
-"""
-service_classification_prompt = """Given the following company website content, identify the company's PRIMARY SERVICE (what they do/provide) in 1–5 words.
-
-SERVICE = What the company does or provides (WHAT they deliver)
-- Examples: Software Development, Consulting, Marketing, IT Support, Web Design, Accounting, Legal Services, Property Management, System Integration
-
-VERTICAL FOCUS = The industry/market they serve (WHO they serve)
-- Examples: Healthcare, Real Estate, Manufacturing, Education, Financial Services
-
-IMPORTANT: You must identify the PRIMARY SERVICE (what they do), NOT the industry they serve.
-
-Guidelines:
-- Focus on the MAIN ACTIVITY or OFFERING the company provides
-- Be specific about the type of service (e.g., "Digital Marketing" not just "Marketing")
-- Use common business service terms
-- Avoid industry names or market segments
-- If providing multiple services, choose the primary one
-
-Examples:
-- A company providing IT consulting to hospitals → "IT Consulting"
-- A software company for restaurants → "Software Development"
-- Marketing agency for law firms → "Digital Marketing"
-- Property management software → "Software Development"
-- HOA management services → "Property Management"
-
-Return ONLY the service term. Ensure the output is less than 50 characters. If the service is unclear, return exactly: ERROR
-
-Website content:
-{content}
-"""
-url_fallback_prompt = """The content of the following company website could not be accessed. Based only on the company URL and your best inference, guess the likely vertical focus in 1–5 words.
-
-Return ONLY the vertical focus term (e.g., "Self Storage", "Outdoor Hospitality", "HOA", etc). This is a low-confidence guess.
-
-URL: {url}
-"""
-service_url_fallback_prompt = """The content of the following company website could not be accessed. Based only on the company URL and your best inference, guess the likely primary service in 1–5 words.
-
-Return ONLY the service term (e.g., "Consulting", "Software Development", "Marketing", etc). This is a low-confidence guess.
-
-URL: {url}
-"""
-fit_prompt = """Given the following company website content, identify if the company is an HP FIT. 
-Definition of HP FIT:
-A company is considered an HP FIT if it meets both of the following criteria:
-1.	Software Focus: It provides software (not services or physical goods) specifically for accounting, bookkeeping, or related ERP (Enterprise Resource Planning) functionality.
-2.	Industry Specialization: The software is designed and marketed for a single specific industry. 
-IMPORTANT: A company is not an HP FIT if it provides ERP software to multiple industries or as a general product. A company is not an HP fit if it does not provide software or IT infrastructure. 
-Examples:
-- A company providing accounting tools for law firms -> TRUE
-- A food purchasing and tracking software company for restaurants ->  TRUE
-- Construction company -> FALSE
-- Company that sells asset management software to utilities, hospitals, and hotels -> FALSE
-
-If a company is an HP FIT, return exactly TRUE. If a company is not an HP FIT, or it is unclear, return exactly FALSE. 
-Website content:
-{content}
-"""
-fit_fallback_prompt = """The content of the following company website could not be accessed. Based only on the company URL and your best inference, guess if the company would be of interest to a private equity firm that specalizes in companies that sell enterprise software designed for a single, specific industry.
-
-Return exactly either TRUE or FALSE. This is a low-confidence guess.
-
-URL: {url}
-"""
+with open("prompts.yaml", "r") as f:
+    strings = yaml.safe_load(f)
+classification_prompt = strings.get("classification_prompt", "")
+service_classification_prompt = strings.get("service_classification_prompt","")
+url_fallback_prompt = strings.get("url_fallback_prompt","")
+service_url_fallback_prompt = strings.get("service_url_fallback_prompt","")
+fit_prompt = strings.get("fit_prompt","")
+fit_fallback_prompt = strings.get("fit_fallback_prompt","")
 def estimate_tokens(text):
     return len(text) // 4
 
