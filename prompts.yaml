@@ -72,12 +72,12 @@ fit_prompt: |
   Given the following company website content, identify if the company is an HP FIT. 
   Definition of HP FIT:
   A company is considered an HP FIT if it meets both of the following criteria:
-  1.	Software Focus: It provides software (not services or physical goods) specifically for accounting, bookkeeping, or related ERP (Enterprise Resource Planning) functionality.
-  2.	Industry Specialization: The software is designed and marketed for a single specific industry. 
+  1.	Enterprise Resource Planning Focus: It provides accounting, bookkeeping, payroll, tax compliance, or related functionality.
+  2.	Industry Specialization: The company's services are designed and marketed for a single specific industry. 
   IMPORTANT: A company is not an HP FIT if it provides ERP software to multiple industries or as a general product. A company is not an HP fit if it does not provide software or IT infrastructure. 
   Examples:
   - A company providing accounting tools for law firms -> TRUE
-  - A food purchasing and tracking software company for restaurants ->  TRUE
+  - An equipment tracking software company for restaurants ->  TRUE
   - Construction company -> FALSE
   - Company that sells asset management software to utilities, hospitals, and hotels -> FALSE
 
@@ -85,8 +85,9 @@ fit_prompt: |
   Website content:
   {content}
 fit_fallback_prompt: |
-  The content of the following company website could not be accessed. Based only on the company URL and your best inference, guess if the company would be of interest to a private equity firm that specalizes in companies that sell enterprise software designed for a single, specific industry.
+  The content of the following company website could not be accessed. Based only on the company URL and your best inference, guess if the company would be of interest to a private equity firm that specalizes in companies that sell enterprise resource planning tools (payroll, accounting, bookkeeping, etc.) designed for a single, specific industry.
 
   Return exactly either TRUE or FALSE. This is a low-confidence guess.
+
 
   URL: {url}
