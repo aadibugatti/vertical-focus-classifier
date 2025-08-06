@@ -74,7 +74,7 @@ fit_prompt: |
   A company is considered an HP FIT if it meets both of the following criteria:
   1.	Enterprise Resource Planning Focus: It provides accounting, bookkeeping, payroll, tax compliance, or related functionality.
   2.	Industry Specialization: The company's services are designed and marketed for a single specific industry. 
-  IMPORTANT: A company is not an HP FIT if it provides Enterprise Resource Planning tools to multiple industries or as a general product. If the website is a dead link 
+  IMPORTANT: A company is not an HP FIT if it provides Enterprise Resource Planning tools to multiple industries or as a general product.
   Examples:
   - A company providing accounting tools for law firms -> TRUE
   - An equipment tracking software company for restaurants ->  TRUE
@@ -91,4 +91,5 @@ fit_fallback_prompt: |
 
 
   URL: {url}
+
 
