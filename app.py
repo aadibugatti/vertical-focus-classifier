@@ -82,15 +82,6 @@ def scrape_website(i, url, df, url_column):
         df.at[i, 'Scrape Status'] = status
 
     time.sleep(random.uniform(0.5, 1.5))
-def fit_ai_predict(text):
-    inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=512)
-    inputs = {k: v.to(device) for k, v in inputs.items()} 
-    with torch.no_grad():
-            outputs = model(**inputs)
-
-    logits = outputs.logits
-    predicted_class_id = torch.argmax(logits, dim=1).item()
-    return predicted_class_id
 # CLASSIFICATION FUNCTIONS
 with open("prompts.yaml", "r") as f:
     strings = yaml.safe_load(f)
@@ -298,7 +289,7 @@ st.subheader("Select a Tool")
 
 tool_option = st.selectbox(
     "Choose which tool you'd like to use:",
-    ["Website Scraper", "Vertical Focus Classifier", "Service Classifier", "Vertical Focus Filter", "Company Query Tool", "Housatonic Fit Tool"]
+    ["Website Scraper", "Vertical Focus Classifier", "Service Classifier", "Vertical Focus Filter", "Company Query Tool", "Housatonic Fit Tool", "Internal Database"]
 )
 
 st.markdown("---")
@@ -1101,6 +1092,11 @@ elif tool_option == "Housatonic Fit Tool":
                 st.metric("Output Tokens", f"{total_output_tokens:,}")
             with col3:
                 st.metric("Estimated Cost", f"${total_cost:.4f}")
+
+    elif tool_option == "Internal Database":
+        internal_data = pd.read_csv("housatonic-internal-company-list.csv")
+        st.subheader("📄 Data Preview")
+        st.dataframe(internal_data)
 
 st.markdown("---")
 st.markdown(f"**Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
