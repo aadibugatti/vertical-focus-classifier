@@ -72,7 +72,7 @@ def scrape_website(i, url, df, url_column):
             status = "SUCCESS"
         else:
             result = ""
-            status = "INSUFFICIENT_CONTENT"
+            status = "INSUFFICIENT_CONTENT_OR_DEAD_LINK"
     except Exception as e:
         result = ""
         status = f"ERROR: {str(e)}"
