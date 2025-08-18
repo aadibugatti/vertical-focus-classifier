@@ -171,7 +171,10 @@ def classify_content(i, content, url, df, content_column, classification_type="v
                 result_column = 'Housatonic Fit OpenAI'
 
         with df_lock:
-            df.at[i, result_column] = result
+            if classification_type == "vertical":
+                df.at[i, result_column] = standardize_phrase(result)
+            else:
+                df.at[i, result_column] = result
 
         time.sleep(random.uniform(0.5, 1.5))
 
