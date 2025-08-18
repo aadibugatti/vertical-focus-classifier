@@ -5,7 +5,5 @@ beautifulsoup4
 openai
 pillow
 torch
-transformers
-safetensors
 pyyaml
 sentence_transformers
