@@ -13,6 +13,7 @@ import random
 import io
 from PIL import Image
 import json
+from sentence_transformers import SentenceTransformer, util
 
 # Load logo
 logo = Image.open("images/Housatonic_Partners_Logo.jpg")
@@ -91,6 +92,16 @@ url_fallback_prompt = strings.get("url_fallback_prompt","")
 service_url_fallback_prompt = strings.get("service_url_fallback_prompt","")
 fit_prompt = strings.get("fit_prompt","")
 fit_fallback_prompt = strings.get("fit_fallback_prompt","")
+
+model = SentenceTransformer('all-MiniLM-L6-v2') 
+with open("naics.txt", "r", encoding="utf-8") as file:
+    naics_names = [line.strip() for line in file if line.strip()]
+naics_embeddings = model.encode(naics_names, convert_to_tensor=True)
+def standardize_phrase(input_phrase: str) -> str:
+    input_embedding = model.encode(input_phrase, convert_to_tensor=True)
+    cosine_scores = util.cos_sim(input_embedding, naics_embeddings)[0]
+    best_match_idx = cosine_scores.argmax()
+    return naics_names[best_match_idx]
 def estimate_tokens(text):
     return len(text) // 4
 
