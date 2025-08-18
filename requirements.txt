@@ -8,3 +8,4 @@ torch
 transformers
 safetensors
 pyyaml
+sentence_transformers
